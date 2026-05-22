@@ -3,6 +3,8 @@
 ---
 description: "Detailed review of Python, Django, DRF, ORM, database, Celery, and task best practices on the current branch. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift, and security issues."
 user_invocable: true
+version: "1.0.0"
+source: "healthkey"
 ---
 
 ## Preamble

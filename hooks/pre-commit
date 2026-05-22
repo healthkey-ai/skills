@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook for the skills repo.
+# Validates that SKILL.md files and skills.json stay in sync.
+#
+# Install:  ln -sf ../../hooks/pre-commit .git/hooks/pre-commit
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+MANIFEST="$REPO_ROOT/skills.json"
+errors=0
+
+# Every skill directory must have a SKILL.md
+for dir in "$REPO_ROOT"/*/; do
+  name=$(basename "$dir")
+  [ "$name" = "hooks" ] && continue
+  if [ ! -f "$dir/SKILL.md" ]; then
+    echo "error: $name/ exists but has no SKILL.md"
+    errors=$((errors + 1))
+  fi
+done
+
+# Every SKILL.md must have version and source metadata
+for skill_md in "$REPO_ROOT"/*/SKILL.md; do
+  [ ! -f "$skill_md" ] && continue
+  name=$(basename "$(dirname "$skill_md")")
+
+  ver=$(grep '^version:' "$skill_md" 2>/dev/null | head -1 | sed 's/^version: *"//;s/"$//')
+  src=$(grep '^source:' "$skill_md" 2>/dev/null | head -1 | sed 's/^source: *"//;s/"$//')
+
+  if [ -z "$ver" ]; then
+    echo "error: $name/SKILL.md missing version field"
+    errors=$((errors + 1))
+  fi
+  if [ -z "$src" ]; then
+    echo "error: $name/SKILL.md missing source field"
+    errors=$((errors + 1))
+  fi
+
+  # Check skills.json has an entry for this skill
+  if [ -f "$MANIFEST" ]; then
+    if ! grep -q "\"$name\"" "$MANIFEST"; then
+      echo "error: $name not found in skills.json"
+      errors=$((errors + 1))
+    else
+      # Check version matches
+      manifest_ver=$(sed -n '/"'"$name"'"/{n;s/.*"version": *"//;s/".*//;p;q;}' "$MANIFEST" 2>/dev/null || true)
+      if [ -n "$manifest_ver" ] && [ "$manifest_ver" != "$ver" ]; then
+        echo "error: $name version mismatch — SKILL.md=$ver, skills.json=$manifest_ver"
+        errors=$((errors + 1))
+      fi
+    fi
+  fi
+done
+
+# Check skills.json entries have matching directories
+# Skill names are at 4-space indent under "skills"
+if [ -f "$MANIFEST" ]; then
+  for name in $(grep -E '^    "[a-z]' "$MANIFEST" | sed 's/^    "//;s/".*//' ); do
+    if [ ! -f "$REPO_ROOT/$name/SKILL.md" ]; then
+      echo "error: skills.json references '$name' but $name/SKILL.md does not exist"
+      errors=$((errors + 1))
+    fi
+  done
+fi
+
+if [ "$errors" -gt 0 ]; then
+  echo ""
+  echo "$errors error(s) — fix before committing"
+  exit 1
+fi

@@ -3,6 +3,8 @@
 ---
 description: "Review code changes on the current branch against the base branch. Finds real bugs, security issues, and design problems. Auto-fixes mechanical issues, asks before touching design decisions."
 user_invocable: true
+version: "1.0.0"
+source: "healthkey"
 ---
 
 ## Preamble

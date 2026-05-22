@@ -1,0 +1,25 @@
+{
+  "version": "1.0.0",
+  "skills": {
+    "backend-review": {
+      "version": "1.0.0",
+      "source": "healthkey",
+      "description": "Python, Django, DRF, ORM, Celery, and task best practices review"
+    },
+    "code-review": {
+      "version": "1.0.0",
+      "source": "healthkey",
+      "description": "Full-stack code review with auto-fix and design checks"
+    },
+    "frontend-review": {
+      "version": "1.0.0",
+      "source": "healthkey",
+      "description": "React, Tailwind, shadcn/ui, and React Query review"
+    },
+    "infra-review": {
+      "version": "1.0.0",
+      "source": "healthkey",
+      "description": "GCP infrastructure and Terraform review"
+    }
+  }
+}

@@ -4,17 +4,17 @@ Shared Claude Code skills for HealthTree / HealthKey projects.
 
 ## Available Skills
 
-| Skill | Description |
-|-------|-------------|
-| `code-review` | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Auto-fixes mechanical issues, asks before design changes. Includes N+1 detection, DRY enforcement, frontend-as-presentation-layer checks. |
-| `backend-review` | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift, and security issues. |
-| `frontend-review` | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps, and Tailwind/shadcn misuse. |
-| `infra-review` | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
+| Skill | Version | Source | Description |
+|-------|---------|--------|-------------|
+| `code-review` | 1.0.0 | hk-labs | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Auto-fixes mechanical issues, asks before design changes. |
+| `backend-review` | 1.0.0 | hk-labs | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
+| `frontend-review` | 1.0.0 | hk-labs | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
+| `infra-review` | 1.0.0 | ht-phr | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
 
 ## Install
 
 ```bash
-# List available skills
+# List available skills with versions
 ./install.sh -l
 
 # Install all skills into the current project
@@ -38,6 +38,40 @@ Skills are copied to `.claude/skills/<name>/SKILL.md` (project) or `~/.claude/sk
 
 Re-running the installer skips skills that are already up to date and prompts before overwriting changed ones (use `-f` to skip prompts).
 
+## Version Check
+
+Check if installed skills are up to date without making changes:
+
+```bash
+# Check current project
+./install.sh --check
+
+# Check global skills
+./install.sh -g --check
+
+# Check a specific project
+./install.sh --check -t ~/my-app
+```
+
+Exit code: `0` = all current, `1` = updates available.
+
+## Development
+
+### Pre-Commit Hook
+
+A pre-commit hook validates skills consistency before committing to this repo:
+
+- Every skill directory has a `SKILL.md`
+- Every `SKILL.md` has `version` and `source` metadata
+- Versions in `SKILL.md` match `skills.json`
+- Every `skills.json` entry has a matching skill directory
+
+Install:
+
+```bash
+ln -sf ../../hooks/pre-commit .git/hooks/pre-commit
+```
+
 ## Usage
 
 After installing, invoke a skill in Claude Code with its slash command:
@@ -56,3 +90,7 @@ Each skill accepts optional arguments:
 /backend-review apps/labs/    # scope to a directory
 /infra-review full            # audit entire infra/ tree
 ```
+
+## Metadata
+
+Each skill has `version` and `source` in its SKILL.md frontmatter. The repo-level `skills.json` manifest tracks all skills with their versions, sources, and descriptions.

@@ -3,6 +3,8 @@
 ---
 description: "Review GCP infrastructure and Terraform code for security, cost, reliability, and best practices. Reviews changed .tf files against the base branch, or audits the full infra/ tree on request."
 user_invocable: true
+version: "1.0.0"
+source: "healthkey"
 ---
 
 ## Preamble

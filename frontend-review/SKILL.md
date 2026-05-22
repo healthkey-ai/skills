@@ -3,6 +3,8 @@
 ---
 description: "Detailed review of React, Tailwind CSS, shadcn/ui, and React Query best practices on the current branch. Catches anti-patterns, stale closures, cache misses, accessibility gaps, and Tailwind/shadcn misuse."
 user_invocable: true
+version: "1.0.0"
+source: "healthkey"
 ---
 
 ## Preamble
