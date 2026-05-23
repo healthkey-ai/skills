@@ -55,7 +55,7 @@ list_skills() {
 
 available_skills() {
   for dir in "$SKILLS_DIR"/*/; do
-    [ -f "$dir/SKILL.md" ] && basename "$dir"
+    [ -f "$dir/SKILL.md" ] && basename "$dir" || true
   done
 }
 

@@ -1,5 +1,5 @@
 ---
-name: frontend-review
+name: hk-frontend-review
 description: "[v1.0.0] React/Tailwind/shadcn/React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps, and shadcn misuse."
 metadata:
   version: "1.0.0"

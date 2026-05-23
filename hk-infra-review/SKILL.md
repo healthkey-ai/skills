@@ -1,5 +1,5 @@
 ---
-name: infra-review
+name: hk-infra-review
 description: "[v1.0.0] Review GCP infrastructure and Terraform code for security, cost, reliability, and CI/CD best practices."
 metadata:
   version: "1.0.0"

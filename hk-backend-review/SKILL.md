@@ -1,5 +1,5 @@
 ---
-name: backend-review
+name: hk-backend-review
 description: "[v1.0.0] Python/Django/DRF/Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeouts, serializer drift, and security issues."
 metadata:
   version: "1.0.0"

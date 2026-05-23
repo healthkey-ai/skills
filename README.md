@@ -6,10 +6,10 @@ Shared Claude Code skills for HealthTree / HealthKey projects.
 
 | Skill | Version | Source | Description |
 |-------|---------|--------|-------------|
-| `code-review` | 1.0.0 | healthkey | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Auto-fixes mechanical issues, asks before design changes. |
-| `backend-review` | 1.0.0 | healthkey | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
-| `frontend-review` | 1.0.0 | healthkey | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
-| `infra-review` | 1.0.0 | healthkey | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
+| `hk-code-review` | 1.0.0 | healthkey | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Auto-fixes mechanical issues, asks before design changes. |
+| `hk-backend-review` | 1.0.0 | healthkey | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
+| `hk-frontend-review` | 1.0.0 | healthkey | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
+| `hk-infra-review` | 1.0.0 | healthkey | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
 
 ## Install
 
@@ -21,13 +21,13 @@ Shared Claude Code skills for HealthTree / HealthKey projects.
 ./install.sh
 
 # Install specific skills into a project
-./install.sh -t ~/my-app code-review backend-review
+./install.sh -t ~/my-app hk-code-review hk-backend-review
 
 # Install globally (available in all projects on this machine)
 ./install.sh --global
 
 # Install specific skills globally
-./install.sh -g frontend-review infra-review
+./install.sh -g hk-frontend-review hk-infra-review
 
 # Force overwrite without prompting
 ./install.sh -f
@@ -77,18 +77,18 @@ ln -sf ../../hooks/pre-commit .git/hooks/pre-commit
 After installing, invoke a skill in Claude Code with its slash command:
 
 ```
-/code-review
-/backend-review
-/frontend-review
-/infra-review
+/hk-code-review
+/hk-backend-review
+/hk-frontend-review
+/hk-infra-review
 ```
 
 Each skill accepts optional arguments:
 
 ```
-/code-review #42              # review a specific PR
-/backend-review apps/labs/    # scope to a directory
-/infra-review full            # audit entire infra/ tree
+/hk-code-review #42              # review a specific PR
+/hk-backend-review apps/labs/    # scope to a directory
+/hk-infra-review full            # audit entire infra/ tree
 ```
 
 ## Metadata

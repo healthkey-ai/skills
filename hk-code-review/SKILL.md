@@ -1,5 +1,5 @@
 ---
-name: code-review
+name: hk-code-review
 description: "[v1.0.0] Review branch diff against base. Finds bugs, security, and design issues. Auto-fixes mechanical problems, asks before design changes."
 metadata:
   version: "1.0.0"
