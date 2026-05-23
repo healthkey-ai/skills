@@ -6,10 +6,10 @@ Shared Claude Code skills for HealthTree / HealthKey projects.
 
 | Skill | Version | Source | Description |
 |-------|---------|--------|-------------|
-| `code-review` | 1.0.0 | hk-labs | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Auto-fixes mechanical issues, asks before design changes. |
-| `backend-review` | 1.0.0 | hk-labs | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
-| `frontend-review` | 1.0.0 | hk-labs | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
-| `infra-review` | 1.0.0 | ht-phr | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
+| `code-review` | 1.0.0 | healthkey | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Auto-fixes mechanical issues, asks before design changes. |
+| `backend-review` | 1.0.0 | healthkey | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
+| `frontend-review` | 1.0.0 | healthkey | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
+| `infra-review` | 1.0.0 | healthkey | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
 
 ## Install
 
@@ -62,9 +62,9 @@ Exit code: `0` = all current, `1` = updates available.
 A pre-commit hook validates skills consistency before committing to this repo:
 
 - Every skill directory has a `SKILL.md`
-- Every `SKILL.md` has `version` and `source` metadata
-- Versions in `SKILL.md` match `skills.json`
-- Every `skills.json` entry has a matching skill directory
+- Every `SKILL.md` has valid frontmatter starting at line 1
+- Required fields: `name`, `description`, `metadata.version`, `metadata.source`
+- `name` matches the directory name
 
 Install:
 
@@ -93,4 +93,4 @@ Each skill accepts optional arguments:
 
 ## Metadata
 
-Each skill has `version` and `source` in its SKILL.md frontmatter. The repo-level `skills.json` manifest tracks all skills with their versions, sources, and descriptions.
+Each SKILL.md has `version` and `source` under `metadata:` in its frontmatter — no separate manifest file needed.

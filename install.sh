@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SKILLS_DIR="$(cd "$(dirname "$0")" && pwd)"
-MANIFEST="$SKILLS_DIR/skills.json"
 
 usage() {
   cat <<EOF
@@ -32,19 +31,16 @@ EOF
   exit 0
 }
 
-get_manifest_version() {
-  local skill="$1"
-  sed -n '/"'"$skill"'"/{n;s/.*"version": *"//;s/".*//;p;q;}' "$MANIFEST" 2>/dev/null || echo "unknown"
+get_version() {
+  grep '^  version:' "$1" 2>/dev/null | head -1 | sed 's/^  version: *"//;s/"$//' || echo ""
 }
 
-get_manifest_source() {
-  local skill="$1"
-  sed -n '/"'"$skill"'"/{n;n;s/.*"source": *"//;s/".*//;p;q;}' "$MANIFEST" 2>/dev/null || echo "unknown"
+get_source() {
+  grep '^  source:' "$1" 2>/dev/null | head -1 | sed 's/^  source: *"//;s/"$//' || echo ""
 }
 
-get_installed_version() {
-  local skill_md="$1"
-  grep '^  version:' "$skill_md" 2>/dev/null | head -1 | sed 's/^  version: *"//;s/"$//' || echo ""
+get_description() {
+  grep '^description:' "$1" 2>/dev/null | head -1 | sed 's/^description: *"//;s/"$//' || echo ""
 }
 
 list_skills() {
@@ -53,10 +49,7 @@ list_skills() {
   for dir in "$SKILLS_DIR"/*/; do
     [ ! -f "$dir/SKILL.md" ] && continue
     name=$(basename "$dir")
-    ver=$(get_installed_version "$dir/SKILL.md")
-    src=$(get_manifest_source "$name")
-    desc=$(grep '^description:' "$dir/SKILL.md" | head -1 | sed 's/^description: *"//;s/"$//')
-    printf "%-20s %-10s %-12s %s\n" "$name" "$ver" "$src" "$desc"
+    printf "%-20s %-10s %-12s %s\n" "$name" "$(get_version "$dir/SKILL.md")" "$(get_source "$dir/SKILL.md")" "$(get_description "$dir/SKILL.md")"
   done
 }
 
@@ -75,9 +68,10 @@ check_skills() {
   local current=0
 
   for skill in "${skills[@]}"; do
-    src="$SKILLS_DIR/$skill/SKILL.md"
-    dst="$dest/$skill/SKILL.md"
-    repo_ver=$(get_manifest_version "$skill")
+    local src="$SKILLS_DIR/$skill/SKILL.md"
+    local dst="$dest/$skill/SKILL.md"
+    local repo_ver
+    repo_ver=$(get_version "$src")
 
     if [ ! -f "$dst" ]; then
       printf "  missing   %-20s (available: %s)\n" "$skill" "$repo_ver"
@@ -86,7 +80,8 @@ check_skills() {
       printf "  current   %-20s %s\n" "$skill" "$repo_ver"
       current=$((current + 1))
     else
-      installed_ver=$(get_installed_version "$dst")
+      local installed_ver
+      installed_ver=$(get_version "$dst")
       printf "  outdated  %-20s (installed: %s, available: %s)\n" "$skill" "${installed_ver:-?}" "$repo_ver"
       outdated=$((outdated + 1))
     fi
@@ -165,7 +160,7 @@ updated=0
 for skill in "${SKILLS[@]}"; do
   src="$SKILLS_DIR/$skill/SKILL.md"
   dst="$DEST/$skill/SKILL.md"
-  repo_ver=$(get_manifest_version "$skill")
+  repo_ver=$(get_version "$src")
 
   if [ -f "$dst" ]; then
     if diff -q "$src" "$dst" >/dev/null 2>&1; then
@@ -174,7 +169,7 @@ for skill in "${SKILLS[@]}"; do
       continue
     fi
 
-    installed_ver=$(get_installed_version "$dst")
+    installed_ver=$(get_version "$dst")
     if [ "$FORCE" = false ]; then
       printf "  update   %s? (%s -> %s) (y/n) " "$skill" "${installed_ver:-?}" "$repo_ver"
       read -r answer
