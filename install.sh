@@ -44,7 +44,7 @@ get_manifest_source() {
 
 get_installed_version() {
   local skill_md="$1"
-  grep '^version:' "$skill_md" 2>/dev/null | head -1 | sed 's/^version: *"//;s/"$//' || echo ""
+  grep '^  version:' "$skill_md" 2>/dev/null | head -1 | sed 's/^  version: *"//;s/"$//' || echo ""
 }
 
 list_skills() {

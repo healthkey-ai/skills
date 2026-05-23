@@ -20,20 +20,44 @@ for dir in "$REPO_ROOT"/*/; do
   fi
 done
 
-# Every SKILL.md must have version and source metadata
+# Every SKILL.md must have valid frontmatter with required fields
 for skill_md in "$REPO_ROOT"/*/SKILL.md; do
   [ ! -f "$skill_md" ] && continue
   name=$(basename "$(dirname "$skill_md")")
 
-  ver=$(grep '^version:' "$skill_md" 2>/dev/null | head -1 | sed 's/^version: *"//;s/"$//')
-  src=$(grep '^source:' "$skill_md" 2>/dev/null | head -1 | sed 's/^source: *"//;s/"$//')
+  # Frontmatter must be the very first bytes of the file
+  first_line=$(head -1 "$skill_md")
+  if [ "$first_line" != "---" ]; then
+    echo "error: $name/SKILL.md frontmatter must start at line 1 (found: $first_line)"
+    errors=$((errors + 1))
+    continue
+  fi
+
+  # Extract fields from frontmatter (indented = under metadata:)
+  fm_name=$(grep '^name:' "$skill_md" 2>/dev/null | head -1 | sed 's/^name: *//;s/"//g' || true)
+  fm_desc=$(grep '^description:' "$skill_md" 2>/dev/null | head -1 || true)
+  ver=$(grep '^  version:' "$skill_md" 2>/dev/null | head -1 | sed 's/^  version: *"//;s/"$//' || true)
+  src=$(grep '^  source:' "$skill_md" 2>/dev/null | head -1 | sed 's/^  source: *"//;s/"$//' || true)
+
+  if [ -z "$fm_name" ]; then
+    echo "error: $name/SKILL.md missing name field"
+    errors=$((errors + 1))
+  elif [ "$fm_name" != "$name" ]; then
+    echo "error: $name/SKILL.md name field is '$fm_name', expected '$name'"
+    errors=$((errors + 1))
+  fi
+
+  if [ -z "$fm_desc" ]; then
+    echo "error: $name/SKILL.md missing description field"
+    errors=$((errors + 1))
+  fi
 
   if [ -z "$ver" ]; then
-    echo "error: $name/SKILL.md missing version field"
+    echo "error: $name/SKILL.md missing metadata.version"
     errors=$((errors + 1))
   fi
   if [ -z "$src" ]; then
-    echo "error: $name/SKILL.md missing source field"
+    echo "error: $name/SKILL.md missing metadata.source"
     errors=$((errors + 1))
   fi
 
@@ -45,7 +69,7 @@ for skill_md in "$REPO_ROOT"/*/SKILL.md; do
     else
       # Check version matches
       manifest_ver=$(sed -n '/"'"$name"'"/{n;s/.*"version": *"//;s/".*//;p;q;}' "$MANIFEST" 2>/dev/null || true)
-      if [ -n "$manifest_ver" ] && [ "$manifest_ver" != "$ver" ]; then
+      if [ -n "$manifest_ver" ] && [ -n "$ver" ] && [ "$manifest_ver" != "$ver" ]; then
         echo "error: $name version mismatch — SKILL.md=$ver, skills.json=$manifest_ver"
         errors=$((errors + 1))
       fi

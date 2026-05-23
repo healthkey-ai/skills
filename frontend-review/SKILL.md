@@ -1,11 +1,12 @@
-# Frontend Review
+---
+name: frontend-review
+description: "[v1.0.0] React/Tailwind/shadcn/React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps, and shadcn misuse."
+metadata:
+  version: "1.0.0"
+  source: "healthkey"
+---
 
----
-description: "Detailed review of React, Tailwind CSS, shadcn/ui, and React Query best practices on the current branch. Catches anti-patterns, stale closures, cache misses, accessibility gaps, and Tailwind/shadcn misuse."
-user_invocable: true
-version: "1.0.0"
-source: "healthkey"
----
+# Frontend Review
 
 ## Preamble
 

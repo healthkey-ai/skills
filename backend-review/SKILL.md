@@ -1,11 +1,12 @@
-# Backend Review
+---
+name: backend-review
+description: "[v1.0.0] Python/Django/DRF/Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeouts, serializer drift, and security issues."
+metadata:
+  version: "1.0.0"
+  source: "healthkey"
+---
 
----
-description: "Detailed review of Python, Django, DRF, ORM, database, Celery, and task best practices on the current branch. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift, and security issues."
-user_invocable: true
-version: "1.0.0"
-source: "healthkey"
----
+# Backend Review
 
 ## Preamble
 

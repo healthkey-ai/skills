@@ -1,11 +1,12 @@
-# Infra Review
+---
+name: infra-review
+description: "[v1.0.0] Review GCP infrastructure and Terraform code for security, cost, reliability, and CI/CD best practices."
+metadata:
+  version: "1.0.0"
+  source: "healthkey"
+---
 
----
-description: "Review GCP infrastructure and Terraform code for security, cost, reliability, and best practices. Reviews changed .tf files against the base branch, or audits the full infra/ tree on request."
-user_invocable: true
-version: "1.0.0"
-source: "healthkey"
----
+# Infra Review
 
 ## Preamble
 
