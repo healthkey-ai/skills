@@ -1,15 +1,15 @@
 # Skills
 
-Shared Claude Code skills for HealthTree / HealthKey projects.
+Shared Claude Code review skills for Django/DRF/Celery + React/Tailwind/shadcn projects on GCP. Project-agnostic — each skill reads the target project's CLAUDE.md for conventions.
 
 ## Available Skills
 
 | Skill | Version | Source | Description |
 |-------|---------|--------|-------------|
-| `hk-code-review` | 1.0.0 | healthkey | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Auto-fixes mechanical issues, asks before design changes. |
-| `hk-backend-review` | 1.0.0 | healthkey | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
-| `hk-frontend-review` | 1.0.0 | healthkey | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
-| `hk-infra-review` | 1.0.0 | healthkey | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
+| `hk-code-review` | 1.1.0 | shared | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Auto-fixes mechanical issues, asks before design changes. |
+| `hk-backend-review` | 1.1.0 | shared | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
+| `hk-frontend-review` | 1.1.0 | shared | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
+| `hk-infra-review` | 1.1.0 | shared | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
 
 ## Install
 
@@ -87,7 +87,7 @@ Each skill accepts optional arguments:
 
 ```
 /hk-code-review #42              # review a specific PR
-/hk-backend-review apps/labs/    # scope to a directory
+/hk-backend-review apps/<app>/   # scope to a directory
 /hk-infra-review full            # audit entire infra/ tree
 ```
 

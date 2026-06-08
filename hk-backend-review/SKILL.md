@@ -1,9 +1,9 @@
 ---
 name: hk-backend-review
-description: "[v1.0.0] Python/Django/DRF/Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeouts, serializer drift, and security issues."
+description: "[v1.1.0] Python/Django/DRF/Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeouts, serializer drift, and security issues."
 metadata:
-  version: "1.0.0"
-  source: "healthkey"
+  version: "1.1.0"
+  source: "shared"
 ---
 
 # Backend Review
@@ -49,7 +49,7 @@ If `NO_DIFF` is `true`, tell the user there are no backend changes to review and
 
 The user may specify:
 - A PR number (e.g., `/backend-review #42`) — fetch with `gh pr diff 42 -- '*.py'`
-- A file or directory (e.g., `/backend-review apps/labs/`) — scope the review to that path
+- A file or directory (e.g., `/backend-review apps/<app>/`) — scope the review to that path
 - Nothing — review all backend changes on the current branch against BASE
 
 ## How This Review Works
@@ -150,7 +150,7 @@ DJANGO VIEWS & URL PATTERNS
 - [ ] Request data accessed via serializer.validated_data — not request.data directly for writes
 
 CELERY TASKS
-- [ ] Task has soft_time_limit and time_limit set (project default: 270s soft / 300s hard)
+- [ ] Task has soft_time_limit and time_limit set (use the project's configured defaults)
 - [ ] Task handles SoftTimeLimitExceeded gracefully — saves progress, logs, returns partial result
 - [ ] Task is idempotent — safe to retry or run twice without side effects
 - [ ] Task arguments are serializable (no model instances, no querysets — pass IDs)
@@ -164,7 +164,7 @@ CELERY TASKS
 - [ ] Task result backend configured if .get() is used (or better: don't use .get() — poll status instead)
 - [ ] Chord/chain/group used correctly — error handling for partial failures
 - [ ] Task logging uses structlog or logger, not print()
-- [ ] No sensitive data (PHI, API keys, credentials) in task arguments or return values (visible in Celery result backend)
+- [ ] No sensitive data (PII, secrets, API keys, credentials) in task arguments or return values (visible in Celery result backend)
 - [ ] Task queue routing: CPU-heavy tasks on worker queue, I/O tasks on IO queue, if configured
 - [ ] Database transactions: task doesn't wrap entire body in atomic() if it includes external API calls — rollback doesn't undo the API call
 
@@ -196,7 +196,7 @@ SECURITY
 - [ ] No path traversal: user input not used in file path construction
 - [ ] Auth checks on every endpoint — permission_classes set or DEFAULT_PERMISSION_CLASSES adequate
 - [ ] CORS / ALLOWED_HOSTS properly scoped — not * in production
-- [ ] Sensitive data not logged (passwords, tokens, PHI, lab results, API keys)
+- [ ] Sensitive data not logged (passwords, tokens, secrets, PII, regulated data, API keys)
 - [ ] CSRF protection not disabled without reason
 - [ ] Session/token expiry configured and reasonable
 - [ ] Password hashing uses Django's built-in hashers — not MD5/SHA1
@@ -370,18 +370,19 @@ If the review finds zero issues with confidence >= 5, say so clearly:
 
 Don't manufacture findings to justify the review.
 
-## Project-Specific Context
+## Project Conventions
 
-These are specific to hk-labs and supplement the general checklist:
+The skill reads the project's CLAUDE.md for the full picture. These patterns
+supplement the general checklist and recur across projects on this stack:
 
-- **No PHI in logs**: This is a health app handling patient lab results. No lab values, patient identifiers, test names, or test results in log output, error messages, Celery task arguments/results, or API error responses. This is a HIPAA-class concern, not a code quality nit.
-- **LLM API keys stay server-side**: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are used by Celery tasks for lab report extraction. They must never appear in API responses, frontend bundles, log output, or git history.
-- **Auth chain**: Dual-path. Standalone uses SimpleJWT (`JWTAuthentication`). Federated uses pluggable `TokenProvider` system — `PartnerTokenView` routes tokens through `PARTNER_AUTH_PROVIDERS`. Each provider's `can_handle()` inspects unverified JWT, `verify()` validates, `_get_or_create` auto-provisions local users. Changes must preserve the `TokenProvider` base class, `PartnerTokenView` exchange flow, and `PARTNER_AUTH_PROVIDERS` config list.
-- **Unit normalization pipeline**: `LabValue` stores values in the test's `default_unit`. Raw values go through `normalise()` via Pint. `source_text`/`source_unit` preserve the original. New code must not bypass this pipeline or compare raw values against normalized ones.
-- **Celery task boundaries**: Extraction tasks have 270s soft / 300s hard time limit. `CELERY_TASK_ALWAYS_EAGER=True` in dev means async bugs only surface in production. Flag code that relies on task ordering or immediate completion.
-- **parsed_results is a JSONField**: `UploadJob.parsed_results` is a JSON blob, not a related model. Mutations require explicit `save()`. The `to_representation` override annotates rows at read time (save_status, status, source_filename) — these are NOT persisted back.
-- **Serializer ↔ TypeScript contract**: `frontend/src/types/labs.ts` mirrors `backend/apps/labs/serializers.py`. When a serializer field changes, the TS type must match. Check both directions.
-- **Django settings**: Settings use django-environ with `env()`. Environment-specific settings are in `config/settings/`. `LAB_PAGINATION_DEV_SIZES` env var controls dev-only pagination sizes. Celery eager mode is detected via `any(arg.endswith("manage.py") for arg in sys.argv)`.
-- **Database**: PostgreSQL in production. Indexes on all filtered/sorted columns. `select_related("test_entry", "test_entry__loinc_entry")` is the common FK chain for lab results. `values.all()` on UploadJob is prefetched — use `len()` not `.count()`.
-- **Summary endpoint**: `/labs/results/summary/` aggregates values per test with a MAX_VALUES_PER_TEST cap. This is the main data source for the frontend results list. Changes here affect both standalone and federation UIs.
-- **DRY**: Flag duplicated logic across files. Same pattern in two places should be extracted into a shared helper, base class, manager method, or mixin. This applies to views, serializers, tasks, and utility functions.
+- **No sensitive data in logs**: secrets, credentials, tokens, PII, or any regulated data must never appear in log output, error messages, Celery task arguments/results, or API error responses. Treat this as a security concern, not a code quality nit.
+- **Server-side keys stay server-side**: API keys and secrets used by Celery tasks (e.g. LLM provider keys) must never appear in API responses, frontend bundles, log output, or git history.
+- **Auth chain**: if the project uses a dual-path auth model (e.g. SimpleJWT standalone plus a pluggable `TokenProvider`/`PartnerTokenView` exchange routed through a provider config list), changes must preserve the provider abstraction, the exchange flow, and the provider config list. Don't hard-code one provider into shared paths.
+- **Domain normalization pipeline**: when the model stores values in a canonical form (a default unit/currency/format) and preserves the raw source separately, new code must not bypass the normalization pipeline or compare raw values against normalized ones.
+- **Celery task boundaries**: respect the configured soft/hard time limits. `CELERY_TASK_ALWAYS_EAGER=True` in dev means async bugs only surface in production — flag code that relies on task ordering or immediate completion.
+- **JSONField mutations**: a JSON column/blob is not a related model — mutations require an explicit `save()`. Annotations added at read time in a `to_representation` override are not persisted back.
+- **Serializer ↔ TypeScript contract**: frontend types mirror backend serializers. When a serializer field changes, the matching TS type must change too. Check both directions.
+- **Django settings**: settings typically use django-environ with `env()` and are split by environment under `config/settings/`. Watch for env-var-driven behavior and dev-only detection logic (e.g. Celery eager mode) that changes prod/dev parity.
+- **Database**: PostgreSQL in production. Index all filtered/sorted columns. Use `select_related`/`prefetch_related` for FK and reverse-FK chains; on a prefetched related set use `len()` not `.count()`.
+- **Aggregation endpoints**: endpoints that aggregate per-entity values with a cap are often the main data source for a frontend list — changes there can affect every consuming UI (standalone and federated).
+- **DRY**: flag duplicated logic across files. Same pattern in two places should be extracted into a shared helper, base class, manager method, or mixin. Applies to views, serializers, tasks, and utility functions.

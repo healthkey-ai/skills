@@ -1,9 +1,9 @@
 ---
 name: hk-code-review
-description: "[v1.0.0] Review branch diff against base. Finds bugs, security, and design issues. Auto-fixes mechanical problems, asks before design changes."
+description: "[v1.1.0] Review branch diff against base. Finds bugs, security, and design issues. Auto-fixes mechanical problems, asks before design changes."
 metadata:
-  version: "1.0.0"
-  source: "healthkey"
+  version: "1.1.0"
+  source: "shared"
 ---
 
 # Code Review
@@ -82,9 +82,9 @@ SECURITY
 - [ ] No path traversal (user input in file paths)
 - [ ] Auth checks on every endpoint that needs them
 - [ ] CORS/ALLOWED_HOSTS properly scoped (not * in production)
-- [ ] Sensitive data not logged (passwords, tokens, PHI, lab results)
-- [ ] HIPAA: no PHI or lab values in logs, env vars, or client-visible error responses
-- [ ] LLM API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY) never exposed to frontend
+- [ ] Sensitive data not logged (passwords, tokens, secrets, PII, regulated data)
+- [ ] Regulated/sensitive data never in logs, env vars, or client-visible error responses
+- [ ] Server-side API keys and secrets never exposed to the frontend bundle
 
 CORRECTNESS
 - [ ] Error handling exists where operations can fail (network, DB, file I/O, Celery tasks)
@@ -93,9 +93,9 @@ CORRECTNESS
 - [ ] Null/undefined handled for optional data
 - [ ] Edge cases: empty collections, zero values, boundary conditions
 - [ ] Database migrations are safe (no data loss, reversible)
-- [ ] API contracts match between frontend types (src/types/labs.ts) and backend serializers
-- [ ] Unit conversion logic preserves precision (Pint/normalise round-trips)
-- [ ] parsed_results JSONField mutations are saved (UploadJob.save after mutating)
+- [ ] API contracts match between frontend types and backend serializers
+- [ ] Numeric/unit conversion logic preserves precision (round-trips cleanly)
+- [ ] JSONField/JSON-column mutations are explicitly saved after mutating
 
 ARCHITECTURE — FRONTEND AS PRESENTATION LAYER
 - [ ] No client-side sorting/grouping of unpaginated backend payloads
@@ -125,7 +125,7 @@ CODE QUALITY — DRY
 INFRASTRUCTURE
 - [ ] Docker/CI changes don't break the build pipeline
 - [ ] Environment variables documented or have sensible defaults
-- [ ] Celery task changes respect soft/hard time limits (270s/300s)
+- [ ] Celery task changes respect the configured soft/hard time limits
 - [ ] Django settings changes work in both development and production
 - [ ] Module Federation config (vite.remote.config.ts) stays compatible with host app
 
@@ -160,7 +160,7 @@ A second agent that ONLY looks for things Agent A would miss:
 - Things that work in dev but break in production (localhost assumptions, missing env vars, CELERY_TASK_ALWAYS_EAGER masking async bugs)
 - Security issues that span multiple files (e.g., auth bypass by combining two endpoints)
 - Missing error paths that would leave users stuck (Celery task failures not surfacing in the UI)
-- Unit conversion edge cases (molecular_weight=None, unknown units, zero values)
+- Numeric/conversion edge cases (null inputs, unknown units, zero and boundary values)
 - Module Federation boundary issues (shared dependencies, hook context availability in remote)
 - Frontend doing backend work: client-side sorting, filtering, aggregation, or deduplication that should be a query param or backend endpoint
 - Backend query patterns: N+1 hiding in serializer methods, missing indexes on new filter/sort columns, unbounded querysets without pagination
@@ -257,19 +257,19 @@ If the review finds zero issues with confidence >= 6, say so clearly:
 
 Don't manufacture findings to justify the review's existence.
 
-## Project-Specific Rules
+## Project Conventions
 
-These are specific to hk-labs. The skill reads CLAUDE.md for the full picture, but
-these are the review-critical items that come up repeatedly:
+The skill reads the project's CLAUDE.md for architecture and conventions. These
+review-critical patterns come up repeatedly across projects on this stack:
 
-- **No PHI or lab values in logs** — this is a health app handling patient lab results. No lab values, patient identifiers, or test results in log output or error messages exposed to the client.
-- **LLM API keys stay server-side** — `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are used by Celery tasks for lab report extraction. They must never appear in frontend bundles, API responses, or git history.
-- **Auth chain**: Dual-path. Standalone mode uses SimpleJWT (`JWTAuthentication`). Federated mode uses the pluggable `TokenProvider` system — host apps send their bearer token (Firebase, Auth0, Cognito, etc.) to `PartnerTokenView`, which routes it through `PARTNER_AUTH_PROVIDERS`. Each provider's `can_handle()` inspects the unverified JWT payload to claim ownership, then `verify()` validates it, and `PartnerAuthentication._get_or_create` auto-provisions local users. The exchange returns local SimpleJWT pairs. Firebase is one configured provider (`FirebaseTokenProvider`), not the only possible one. Changes to auth must preserve the provider abstraction (`TokenProvider` base class), the `PartnerTokenView` exchange flow, and the `PARTNER_AUTH_PROVIDERS` config list.
-- **Frontend is a presentation layer** — save_status, duplicate detection, unit normalization, status computation, sorting, filtering, aggregation, and pagination all happen on the backend. The frontend must never re-derive or re-compute these. If you see the frontend doing `.filter()` with more than two conditions on an API payload, `.reduce()` for aggregation, client-side sorting of backend data, or client-side deduplication, flag it. The frontend should receive fully prepared JSON shapes optimized for immediate rendering.
-- **Unit normalization pipeline** — `LabValue` stores values in the test's `default_unit`. Raw values go through `normalise()` (via Pint). The `source_text`/`source_unit` fields preserve the original. Reviews must check that new code doesn't bypass this pipeline or compare raw values against normalized ones.
-- **Celery task boundaries** — Extraction tasks have a 270s soft / 300s hard time limit. New task code must respect this. `CELERY_TASK_ALWAYS_EAGER=True` in dev means async bugs only surface in production — flag any code that relies on task ordering or immediate completion.
-- **Module Federation** — The frontend ships both as a standalone Vite app (`vite.config.ts`) and as a Module Federation remote (`vite.remote.config.ts`). Changes to shared dependencies, context providers, or route structure must work in both modes.
-- **Serializer ↔ TypeScript contract** — `frontend/src/types/labs.ts` mirrors `backend/apps/labs/serializers.py`. When a serializer field changes, the TS type must match. Check both directions.
-- **parsed_results is a JSONField** — `UploadJob.parsed_results` is a JSON blob, not a related model. Mutations to it require an explicit `save()`. The `to_representation` override annotates rows at read time (save_status, status, source_filename) — these annotations are NOT persisted back.
-- **Database query optimization** — Every new queryset must be checked for: N+1 (queries inside loops or serializer methods), missing indexes on columns used in WHERE/ORDER BY/JOIN, unbounded queries on growing tables (must have pagination or LIMIT), and aggregations done in Python loops instead of database-native functions (Count, Sum, annotate). Use `select_related`/`prefetch_related` aggressively. Bulk operations (`__in`, `bulk_update`, `bulk_create`) over sequential saves.
-- **DRY** — Flag duplicated logic across files. Same pattern in two places should be extracted into a shared helper, base class, or utility. This applies to both frontend (shared hooks, components, utils) and backend (shared mixins, managers, helpers).
+- **No sensitive data in logs** — secrets, credentials, tokens, PII, or any regulated data must never appear in log output, error messages, env vars, or client-visible error responses.
+- **Server-side keys stay server-side** — API keys and secrets used by background tasks (e.g. LLM provider keys) must never appear in frontend bundles, API responses, or git history.
+- **Auth abstractions** — if the project uses a pluggable auth/token-provider system (e.g. SimpleJWT standalone plus a `TokenProvider`/`PartnerTokenView` exchange for federated host apps), changes must preserve the provider abstraction, the token-exchange flow, and the provider config list. Don't hard-code one provider into shared paths.
+- **Frontend is a presentation layer** — sorting, multi-attribute filtering, aggregation, deduplication, status computation, and pagination belong on the backend. Flag frontend `.filter()` with more than two conditions on an API payload, `.reduce()` for aggregation, client-side sorting of backend data, or client-side deduplication. The frontend should receive fully prepared JSON shapes optimized for immediate rendering.
+- **Domain normalization pipelines** — when the backend normalizes values (units, currencies, formats) into a canonical form and preserves the raw source separately, new code must not bypass the pipeline or compare raw values against normalized ones.
+- **Background task boundaries** — Celery/async tasks have configured soft/hard time limits; new task code must respect them. `CELERY_TASK_ALWAYS_EAGER=True` in dev means async bugs only surface in production — flag code that relies on task ordering or immediate completion.
+- **Module Federation** — if the frontend ships both as a standalone Vite app (`vite.config.ts`) and a Module Federation remote (`vite.remote.config.ts`), changes to shared dependencies, context providers, or route structure must work in both modes.
+- **Serializer ↔ TypeScript contract** — frontend types mirror backend serializers. When a serializer field changes, the matching TS type must change too. Check both directions.
+- **JSONField mutations** — mutations to a JSON column/blob require an explicit `save()`. Annotations added at read time (in a `to_representation` override) are not persisted back.
+- **Database query optimization** — every new queryset: check for N+1 (queries inside loops or serializer methods), missing indexes on columns used in WHERE/ORDER BY/JOIN, unbounded queries on growing tables (must have pagination or LIMIT), and aggregations done in Python loops instead of database-native functions (Count, Sum, annotate). Use `select_related`/`prefetch_related` aggressively. Prefer bulk operations (`__in`, `bulk_update`, `bulk_create`) over sequential saves.
+- **DRY** — flag duplicated logic across files. Same pattern in two places should be extracted into a shared helper, base class, or utility. Applies to both frontend (shared hooks, components, utils) and backend (shared mixins, managers, helpers).

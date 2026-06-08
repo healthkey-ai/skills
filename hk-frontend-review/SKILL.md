@@ -1,9 +1,9 @@
 ---
 name: hk-frontend-review
-description: "[v1.0.0] React/Tailwind/shadcn/React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps, and shadcn misuse."
+description: "[v1.1.0] React/Tailwind/shadcn/React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps, and shadcn misuse."
 metadata:
-  version: "1.0.0"
-  source: "healthkey"
+  version: "1.1.0"
+  source: "shared"
 ---
 
 # Frontend Review
@@ -105,7 +105,7 @@ REACT QUERY (TANSTACK QUERY)
 - [ ] Error handling: either global error handler or per-query onError/useErrorBoundary — errors aren't silently swallowed
 - [ ] No waterfall queries — parallel fetches use useQueries or multiple useQuery calls (not sequential awaits in useEffect)
 - [ ] Mutation loading states shown in UI (isPending check on buttons, forms disabled during submit)
-- [ ] queryClient.invalidateQueries uses specific keys — not broad `["labs"]` that triggers unnecessary refetches
+- [ ] queryClient.invalidateQueries uses specific keys — not a broad top-level key (e.g. `["domain"]`) that triggers unnecessary refetches
 - [ ] No duplicate queries — same data fetched by multiple components should share a query key, not make separate requests
 - [ ] select option used to transform/filter query data rather than useMemo on query.data
 - [ ] Infinite queries (useInfiniteQuery) preferred over manual page-tracking for infinite scroll UIs
@@ -181,9 +181,9 @@ PERFORMANCE
 MODULE FEDERATION SPECIFIC (when reviewing federation/ files)
 - [ ] Shared singleton dependencies (React, React Query, Axios) declared in vite.remote.config.ts
 - [ ] No direct react-router-dom usage in federation components — navigation via callback props
-- [ ] Context providers (LabsProvider) wrap all federation entry points
+- [ ] The app's context provider wraps all federation entry points
 - [ ] Federation hooks inject apiClient from context — not importing global api instance
-- [ ] CSS token contract (--hk-labs-*) used instead of hard-coded colors
+- [ ] Design-token contract classes used instead of hard-coded colors
 - [ ] Components work both standalone and federated — no assumptions about host app
 - [ ] No window/document globals that might not exist in SSR host apps
 ```
@@ -311,14 +311,15 @@ If the review finds zero issues with confidence >= 5, say so clearly:
 
 Don't manufacture findings to justify the review.
 
-## Project-Specific Context
+## Project Conventions
 
-These are specific to hk-labs and supplement the general checklist:
+The skill reads the project's CLAUDE.md for the full picture. These patterns
+supplement the general checklist and recur across projects on this stack:
 
-- **Design token system**: This project uses a dual-layer token system. The standalone app defines tokens in `globals.css` as CSS custom properties. The federation layer maps through `--hk-labs-*` contract tokens in `federation/labs.css`. Always use semantic token classes (`text-foreground`, `bg-muted`, `text-brand-700`, `text-success-700`, etc.) — never raw colors.
-- **shadcn/ui customization**: The project uses a customized shadcn setup with the healthkey design system. Components are in `src/components/ui/`. Button has variants: `default`, `primary`, `secondary`, `destructive`, `outline`, `ghost`, `link`. Use the appropriate variant.
-- **React Query conventions**: Query keys follow `["labs", "entity", ...params]` pattern defined in `KEYS` object in `src/features/labs/api.ts`. Federation hooks in `src/federation/hooks.ts` are thin wrappers injecting apiClient. Both must stay in sync.
-- **Module Federation**: The frontend ships as both standalone Vite app and MF remote. Federation components must not use react-router-dom, must inject apiClient via context, and must use callback props for navigation. CSS must work through the `--hk-labs-*` token contract.
-- **Pagination pattern**: URL-synced pagination (useSearchParams) for standalone pages, useState for federation components. Both use the shared `PaginationControls` component and `PageSize` type from `src/lib/pagination.ts`.
-- **Shared components**: Reusable lab components live in `src/components/labs/`. Federation and standalone pages both import from here. When reviewing, check that components extracted here don't have router or global-state dependencies.
-- **No PHI in client-visible output**: This is a health app. Console.log of lab values, test names, or patient data is a security issue, not just a code quality nit.
+- **Design token system**: many projects use a dual-layer token system — the standalone app defines tokens in `globals.css` as CSS custom properties, and the federation layer maps through a contract-token prefix in a separate CSS file. Always use semantic token classes (`text-foreground`, `bg-muted`, brand/status token classes, etc.) — never raw colors. Confirm the project's actual token names before flagging.
+- **shadcn/ui customization**: projects typically use a customized shadcn setup with their own design system, with components under `src/components/ui/`. Check the project's actual Button (and other) variants and use the semantically correct one.
+- **React Query conventions**: query keys follow a consistent `["domain", "entity", ...params]` hierarchy, usually centralized in a `KEYS` object. Federation hooks are thin wrappers injecting `apiClient`; the standalone and federation hooks must stay in sync.
+- **Module Federation**: when the frontend ships as both a standalone Vite app and an MF remote, federation components must not use react-router-dom, must inject `apiClient` via context, must use callback props for navigation, and must style through the design-token contract.
+- **Pagination pattern**: a common split is URL-synced pagination (useSearchParams) for standalone pages and useState for federation components, sharing one `PaginationControls` component and page-size type. Keep both paths consistent.
+- **Shared components**: reusable domain components extracted into a shared directory are imported by both federation and standalone pages — check that they don't carry router or global-state dependencies.
+- **No sensitive data in client-visible output**: `console.log` of PII, secrets, or any regulated data is a security issue, not just a code quality nit.

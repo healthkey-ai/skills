@@ -1,9 +1,9 @@
 ---
 name: hk-infra-review
-description: "[v1.0.0] Review GCP infrastructure and Terraform code for security, cost, reliability, and CI/CD best practices."
+description: "[v1.1.0] Review GCP infrastructure and Terraform code for security, cost, reliability, and CI/CD best practices."
 metadata:
-  version: "1.0.0"
-  source: "healthkey"
+  version: "1.1.0"
+  source: "shared"
 ---
 
 # Infra Review
@@ -118,12 +118,12 @@ NETWORK
 - [ ] No overly permissive CORS (not * in production)
 - [ ] ALLOWED_HOSTS is explicit, not *
 
-HIPAA / COMPLIANCE
-- [ ] No PHI in env vars, Terraform output values, or state file exposure
+DATA PROTECTION / COMPLIANCE
+- [ ] No sensitive or regulated data (PII, secrets) in env vars, Terraform output values, or state file exposure
 - [ ] Audit logging enabled (Cloud Audit Logs) for data-access operations
-- [ ] GCS buckets with patient data have uniform bucket-level access
+- [ ] GCS buckets with sensitive data have uniform bucket-level access
 - [ ] Encryption at rest: default Google-managed or CMEK configured
-- [ ] No public GCS buckets containing health data
+- [ ] No public GCS buckets containing sensitive or regulated data
 ```
 
 **Agent B — Reliability & Cost Review**
@@ -334,24 +334,25 @@ If the review finds zero issues with confidence >= 6, say so clearly:
 
 Don't manufacture findings to justify the review's existence.
 
-## Project-Specific Rules
+## Project Conventions
 
-These are specific to ht-phr / hk-labs. The skill reads CLAUDE.md for the full picture,
-but these are the review-critical items:
+The skill reads the project's CLAUDE.md for the full picture. These review-critical
+patterns recur across GCP/Terraform projects on this stack:
 
-- **Two services, one GCP project**: ht-phr and hk-labs share Cloud SQL instance, Artifact
-  Registry, and GCP project. Each has its own Cloud Run service, SA, secrets, and WIF pool.
-- **HIPAA-regulated**: This handles patient health records. No PHI in logs, env vars,
-  Terraform state outputs, or publicly accessible storage.
-- **Shared Firebase project**: `healthtree-test` — both services authenticate with the same
-  Firebase project. `FIREBASE_CREDENTIALS_JSON` is a service account key passed as env var
-  (flag this as a migration target — should move to Workload Identity or Secret Manager).
-- **Cloud Tasks → Cloud Run**: hk-labs uses Cloud Tasks with OIDC tokens to invoke its own
-  Cloud Run service. The tasks SA needs `roles/run.invoker`, and the Cloud Run SA needs
-  `roles/iam.serviceAccountUser` on the tasks SA plus `roles/cloudtasks.enqueuer`.
-- **Module Federation**: ht-phr frontend loads remote JS from hk-labs Cloud Run. CORS on
-  hk-labs must include the ht-phr origin.
-- **Blue-green deploy**: CI deploys with `--no-traffic`, runs migrations, then shifts traffic.
-  Review any changes that could break this ordering.
-- **State in GCS**: `ht-phr-tf-state` bucket, prefix per environment. No state locking
-  beyond GCS object versioning — flag if concurrent applies are possible.
+- **Multiple services, one GCP project**: when several services share a Cloud SQL instance,
+  Artifact Registry, and GCP project, each should still have its own Cloud Run service, SA,
+  secrets, and WIF pool. Flag shared SAs or secrets that cross service boundaries.
+- **Regulated data**: if the project handles regulated or sensitive data, keep it out of logs,
+  env vars, Terraform state outputs, and publicly accessible storage.
+- **Shared identity provider**: when services share a Firebase/auth project, a credentials JSON
+  passed as an env var is a migration target — flag it and recommend Workload Identity or
+  Secret Manager.
+- **Cloud Tasks → Cloud Run**: a service using Cloud Tasks with OIDC tokens to invoke its own
+  Cloud Run service needs the tasks SA to have `roles/run.invoker`, and the Cloud Run SA to
+  have `roles/iam.serviceAccountUser` on the tasks SA plus `roles/cloudtasks.enqueuer`.
+- **Module Federation**: when one frontend loads remote JS from another service's Cloud Run,
+  the remote's CORS must include the host origin.
+- **Blue-green deploy**: a common pattern deploys with `--no-traffic`, runs migrations, then
+  shifts traffic. Review any change that could break this ordering.
+- **State in GCS**: a per-environment prefix in a GCS state bucket with no locking beyond object
+  versioning is risky — flag if concurrent applies are possible.

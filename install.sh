@@ -22,9 +22,9 @@ Arguments:
 
 Examples:
   $(basename "$0") -l
-  $(basename "$0") -t ../ht-phr code-review backend-review
+  $(basename "$0") -t ../my-app hk-code-review hk-backend-review
   $(basename "$0") --global
-  $(basename "$0") -g frontend-review infra-review
+  $(basename "$0") -g hk-frontend-review hk-infra-review
   $(basename "$0") --check
   $(basename "$0") -g --check
 EOF
