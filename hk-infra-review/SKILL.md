@@ -1,8 +1,8 @@
 ---
 name: hk-infra-review
-description: "[v1.1.0] Review GCP infrastructure and Terraform code for security, cost, reliability, and CI/CD best practices."
+description: "[v1.2.0] Review GCP infrastructure and Terraform code for security, cost, reliability, and CI/CD best practices."
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   source: "shared"
 ---
 
@@ -11,20 +11,44 @@ metadata:
 ## Preamble
 
 ```bash
-BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-echo "BRANCH: $BRANCH"
+BRANCH=$(git branch --show-current 2>/dev/null)
+echo "BRANCH: ${BRANCH:-detached}"
 
-BASE="dev"
-if git rev-parse --verify origin/dev >/dev/null 2>&1; then
-  BASE="dev"
-elif git rev-parse --verify origin/main >/dev/null 2>&1; then
-  BASE="main"
+# Base: the open PR's base if this branch has one, else the remote default branch.
+BASE=$(gh pr view --json baseRefName,state -q 'select(.state == "OPEN") | .baseRefName' 2>/dev/null || true)
+if [ -z "$BASE" ]; then
+  BASE=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
 fi
-echo "BASE: $BASE"
+if [ -z "$BASE" ]; then
+  for b in main master; do
+    if git rev-parse --verify -q "origin/$b" >/dev/null; then BASE="$b"; break; fi
+  done
+fi
+echo "BASE: ${BASE:-unknown}"
+
+# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
+if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
+  git fetch -q origin "$BASE" 2>/dev/null || true
+fi
+MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
+if [ -z "$MERGE_BASE" ]; then
+  echo "NO_BASE: true"
+else
+  echo "MERGE_BASE: $MERGE_BASE"
+fi
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "UNCOMMITTED: true"
+else
+  echo "UNCOMMITTED: false"
+fi
 
 # Check for .tf changes
-TF_DIFF=$(git diff "$BASE"..."$BRANCH" --name-only -- '*.tf' '*.tfvars' 2>/dev/null || echo "")
-TF_DIFF_STAT=$(git diff "$BASE"..."$BRANCH" --stat -- '*.tf' '*.tfvars' 2>/dev/null || echo "")
+TF_DIFF=""
+TF_DIFF_STAT=""
+if [ -n "$MERGE_BASE" ]; then
+  TF_DIFF=$( { git diff "$MERGE_BASE" --name-only -- '*.tf' '*.tfvars'; git ls-files --others --exclude-standard -- '*.tf' '*.tfvars'; } | grep . )
+  TF_DIFF_STAT=$(git diff "$MERGE_BASE" --stat -- '*.tf' '*.tfvars')
+fi
 
 if [ -z "$TF_DIFF" ]; then
   echo "TF_DIFF: none"
@@ -36,7 +60,10 @@ else
 fi
 
 # Also check for workflow changes that touch infra
-CI_DIFF=$(git diff "$BASE"..."$BRANCH" --name-only -- '.github/workflows/*terraform*' '.github/workflows/*deploy*' 2>/dev/null || echo "")
+CI_DIFF=""
+if [ -n "$MERGE_BASE" ]; then
+  CI_DIFF=$(git diff "$MERGE_BASE" --name-only -- '.github/workflows/*terraform*' '.github/workflows/*deploy*')
+fi
 if [ -n "$CI_DIFF" ]; then
   echo "CI_DIFF: found"
   echo "$CI_DIFF"
@@ -58,13 +85,17 @@ echo "TF_VERSION: $TF_VERSION"
 ## Input
 
 The user may specify:
-- Nothing — review `.tf` / `.tfvars` changes on the current branch against BASE
+- Nothing — review `.tf` / `.tfvars` changes in the working tree (committed + uncommitted + untracked) against MERGE_BASE
+- A range (e.g., `/hk-infra-review dev..HEAD`) — review `git diff dev...HEAD -- '*.tf' '*.tfvars'` (committed changes only)
 - `full` or `audit` — review the entire `infra/` tree regardless of branch diff
 - A file path — review that specific file
-- A PR number (e.g., `/infra-review #42`) — fetch the PR diff and review only infra files
+- A PR number (e.g., `/hk-infra-review #42`) — fetch with `gh pr diff 42` and review only the infra files in it
+- `--fix` — apply mechanical fixes without asking (see Fix Mode)
 
 If `TF_DIFF` is `none` and the user did not request a full audit, ask whether they want a
 full audit of all infrastructure files instead.
+
+If `NO_BASE` is `true`, the base branch could not be resolved locally: tell the user, and ask for an explicit range (e.g. `dev..HEAD`) or a PR number or a full audit, instead of guessing.
 
 ## How This Review Works
 
@@ -74,7 +105,7 @@ Three phases. Phase 2 agents run in parallel.
 
 Read these in parallel:
 
-1. **The diff or full tree**: If reviewing a diff, `git diff $BASE...$BRANCH -- '*.tf' '*.tfvars'`.
+1. **The diff or full tree**: If reviewing a diff, `git diff $MERGE_BASE -- '*.tf' '*.tfvars'` plus untracked `.tf` files.
    If full audit, read all files under `infra/`.
 2. **CLAUDE.md**: Read the project's CLAUDE.md for architecture context (especially the
    "Architecture" and "Infrastructure Targets" sections).
@@ -240,11 +271,21 @@ FIX: <exact code change if fixable, or recommendation if not>
 
 Then apply the **Fix-First** workflow:
 
+#### Fix Mode
+
+By default this review **does not edit files**. Findings in the auto-fix class
+below are presented as "Ready to fix" and applied only after the user approves
+them, in the same AskUserQuestion batch as "Needs your call".
+
+Only when the user passed `--fix` are auto-fix findings applied immediately, as
+"Auto-fixed". Even then, if the preamble printed `UNCOMMITTED: true`, say so
+before editing: the fixes will be mixed into the user's uncommitted changes.
+
 #### Fix-First Rules
 
 For each finding, decide: **auto-fix**, **ask**, or **flag**.
 
-**Auto-fix** (do it, show what you did):
+**Auto-fix** (mechanical; applied after approval, or immediately with `--fix`):
 - Missing `description` on variables
 - Missing `sensitive = true` on password/key/token variables
 - Missing type constraints on variables
@@ -295,7 +336,7 @@ Present findings grouped by action:
 **Services**: <list of GCP services touched>
 **Risk level**: <overall assessment: clean / low risk / medium risk / high risk>
 
-## Auto-fixed (N items)
+## Ready to fix (N items)  <!-- "Auto-fixed" with --fix -->
 
 ### 1. <title> [severity] [category] [confidence: N/10]
 <file:line> — <one-line description>

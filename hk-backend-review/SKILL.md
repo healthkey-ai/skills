@@ -1,8 +1,8 @@
 ---
 name: hk-backend-review
-description: "[v1.1.0] Python/Django/DRF/Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeouts, serializer drift, and security issues."
+description: "[v1.2.0] Python/Django/DRF/Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeouts, serializer drift, and security issues."
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   source: "shared"
 ---
 
@@ -11,30 +11,58 @@ metadata:
 ## Preamble
 
 ```bash
-BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-echo "BRANCH: $BRANCH"
+BRANCH=$(git branch --show-current 2>/dev/null)
+echo "BRANCH: ${BRANCH:-detached}"
 
-BASE="main"
-if git rev-parse --verify origin/main >/dev/null 2>&1; then
-  BASE="main"
-elif git rev-parse --verify origin/master >/dev/null 2>&1; then
-  BASE="master"
+# Base: the open PR's base if this branch has one, else the remote default branch.
+BASE=$(gh pr view --json baseRefName,state -q 'select(.state == "OPEN") | .baseRefName' 2>/dev/null || true)
+if [ -z "$BASE" ]; then
+  BASE=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
 fi
-echo "BASE: $BASE"
+if [ -z "$BASE" ]; then
+  for b in main master; do
+    if git rev-parse --verify -q "origin/$b" >/dev/null; then BASE="$b"; break; fi
+  done
+fi
+echo "BASE: ${BASE:-unknown}"
 
-DIFF_STAT=$(git diff "$BASE"..."$BRANCH" --stat -- '*.py' '*.sql' 2>/dev/null || echo "")
-if [ -z "$DIFF_STAT" ]; then
+# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
+if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
+  git fetch -q origin "$BASE" 2>/dev/null || true
+fi
+MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
+if [ -z "$MERGE_BASE" ]; then
+  echo "NO_BASE: true"
+else
+  echo "MERGE_BASE: $MERGE_BASE"
+fi
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "UNCOMMITTED: true"
+else
+  echo "UNCOMMITTED: false"
+fi
+
+DIFF_STAT=""
+UNTRACKED=""
+if [ -n "$MERGE_BASE" ]; then
+  DIFF_STAT=$(git diff "$MERGE_BASE" --stat -- '*.py' '*.sql')
+  UNTRACKED=$(git ls-files --others --exclude-standard -- '*.py' '*.sql')
+fi
+if [ -z "$MERGE_BASE" ]; then
+  :
+elif [ -z "$DIFF_STAT" ] && [ -z "$UNTRACKED" ]; then
   echo "NO_DIFF: true"
 else
   echo "NO_DIFF: false"
-  echo "$DIFF_STAT"
+  [ -n "$DIFF_STAT" ] && echo "$DIFF_STAT"
+  [ -n "$UNTRACKED" ] && printf 'UNTRACKED:\n%s\n' "$UNTRACKED"
 fi
 
-FILES_CHANGED=$(git diff "$BASE"..."$BRANCH" --name-only -- '*.py' '*.sql' 2>/dev/null | wc -l | tr -d ' ')
+FILES_CHANGED=$( { [ -n "$MERGE_BASE" ] && git diff "$MERGE_BASE" --name-only -- '*.py' '*.sql'; printf '%s\n' "$UNTRACKED"; } | grep -c . )
 echo "FILES_CHANGED: $FILES_CHANGED"
 
 # Show if migrations are involved
-MIGRATIONS=$(git diff "$BASE"..."$BRANCH" --name-only -- '*/migrations/*.py' 2>/dev/null)
+MIGRATIONS=$( { [ -n "$MERGE_BASE" ] && git diff "$MERGE_BASE" --name-only -- '*/migrations/*.py'; printf '%s\n' "$UNTRACKED" | grep '/migrations/'; } | grep . )
 if [ -n "$MIGRATIONS" ]; then
   echo "HAS_MIGRATIONS: true"
   echo "$MIGRATIONS"
@@ -44,13 +72,16 @@ fi
 ```
 
 If `NO_DIFF` is `true`, tell the user there are no backend changes to review and stop.
+If `NO_BASE` is `true`, the base branch could not be resolved locally: tell the user, and ask for an explicit range (e.g. `dev..HEAD`) or a PR number instead of guessing.
 
 ## Input
 
 The user may specify:
-- A PR number (e.g., `/backend-review #42`) — fetch with `gh pr diff 42 -- '*.py'`
-- A file or directory (e.g., `/backend-review apps/<app>/`) — scope the review to that path
-- Nothing — review all backend changes on the current branch against BASE
+- A PR number (e.g., `/hk-backend-review #42`) — fetch with `gh pr diff 42` and review only the `*.py` / `*.sql` files in it (`gh pr diff` has no path filter)
+- A range (e.g., `/hk-backend-review dev..HEAD`) — review `git diff dev...HEAD -- '*.py' '*.sql'` (committed changes only)
+- A file or directory (e.g., `/hk-backend-review apps/<app>/`) — scope the review to that path
+- Nothing — review all backend changes in the working tree (committed + uncommitted + untracked) against MERGE_BASE
+- `--fix` — apply mechanical fixes without asking (see Fix Mode)
 
 ## How This Review Works
 
@@ -60,9 +91,9 @@ Three phases. Phase 1 gathers context, Phase 2 runs two parallel review agents, 
 
 Read these in parallel:
 
-1. **The diff**: `git diff $BASE...$BRANCH -- '*.py' '*.sql'` (or scoped to the user's path)
+1. **The diff**: `git diff $MERGE_BASE -- '*.py' '*.sql'` plus the files listed under UNTRACKED (or the PR / range diff, or scoped to the user's path)
 2. **CLAUDE.md**: Read the project's CLAUDE.md for conventions and architecture
-3. **Recent commits**: `git log $BASE..$BRANCH --oneline` for commit intent
+3. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent
 4. **Settings**: Read the Django settings file(s) for database, celery, middleware, and auth configuration
 5. **requirements/pyproject**: Check dependency versions (Django, DRF, Celery, etc.)
 
@@ -280,14 +311,23 @@ Same output format as Agent A.
 3. **Filter by confidence** — only show findings with confidence >= 5
 4. **Sort** by category, then severity (critical first), then confidence (highest first)
 
+#### Fix Mode
+
+By default this review **does not edit files**. Findings in the auto-fix class
+below are presented as "Ready to fix" and applied only after the user approves
+them, in the same AskUserQuestion batch as "Needs your call".
+
+Only when the user passed `--fix` are auto-fix findings applied immediately, as
+"Auto-fixed". Even then, if the preamble printed `UNCOMMITTED: true`, say so
+before editing: the fixes will be mixed into the user's uncommitted changes.
+
 #### Fix-First Rules
 
 For each finding, decide: **auto-fix**, **ask**, or **flag**.
 
-**Auto-fix** (do it, show what you did):
+**Auto-fix** (mechanical; applied after approval, or immediately with `--fix`):
 - Missing select_related/prefetch_related on obvious N+1 patterns
 - .count() on prefetched queryset → len()
-- Missing db_index=True on columns used in filter/order_by
 - Bare except → specific exception
 - Missing type hints addable from context
 - print() → logger calls
@@ -298,6 +338,7 @@ For each finding, decide: **auto-fix**, **ask**, or **flag**.
 
 **Ask** (present the fix, wait for approval):
 - Migration changes (adding/removing fields, indexes, constraints)
+- Missing db_index=True / Meta.indexes on columns used in filter/order_by (needs a migration)
 - Changing queryset logic or filters
 - Restructuring serializers (nesting, field changes)
 - Celery task changes (retry logic, timeout, error handling)
