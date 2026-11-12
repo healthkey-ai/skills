@@ -133,6 +133,7 @@ profile_check() { # <repo> <label> <regex>...
   done
 }
 
+profile_check dirty "profile-none" '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
 mkdir -p "$WORK/dirty/docs" && echo p > "$WORK/dirty/docs/review-profile.md"
 profile_check dirty "profile-worktree" '^REVIEW_PROFILE: docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: working tree$'
 mkdir -p "$WORK/dirty/.claude" && echo p > "$WORK/dirty/.claude/review-profile.md"
@@ -156,6 +157,15 @@ profile_check profile "profile-deleted" '^REVIEW_PROFILE: origin/dev:docs/review
   mkdir -p .claude && git mv docs/review-profile.md .claude/review-profile.md &&
   git commit -q -m relocate )
 profile_check profile "profile-relocated" '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
+
+# With both paths on the base, .claude/ wins there too -- even when the branch
+# tries to remove docs/ and keep only its own copy.
+( cd "$WORK/profile" && git checkout -q -B dev origin/dev &&
+  mkdir -p .claude && echo p > .claude/review-profile.md &&
+  git add .claude && git commit -q -m claude-profile && git push -q origin dev &&
+  git checkout -q -B feat-both origin/dev &&
+  git rm -q docs/review-profile.md && git commit -q -m drop-docs )
+profile_check profile "profile-base-precedence" '^REVIEW_PROFILE: origin/dev:\.claude/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
 
 echo "$checks checks, $fails failed"
 [ "$fails" -eq 0 ]

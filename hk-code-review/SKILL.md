@@ -134,7 +134,7 @@ Read these in parallel (use Agent tool for the diff if it's large):
 
 1. **The diff**: `git diff $MERGE_BASE` plus the files listed under UNTRACKED (or the PR / range diff)
 2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for conventions and architecture
-3. **Review profile**: Read the profile the preamble reported. When the path starts with `origin/`, read it with `git show <ref>`: the base copy is deliberate, so a diff cannot relax the gate it is reviewed against. For a PR number or an explicit range, resolve the profile against **that** base rather than the one the preamble detected, and say which base you used. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins. With no profile, the defaults below apply
+3. **Review profile**: Read the profile the preamble reported. When the path starts with `origin/`, read it with `git show <ref>`: the base copy is deliberate, so a diff cannot relax the gate it is reviewed against. For a PR number or an explicit range, resolve the profile against **that** base rather than the one the preamble detected (`git fetch origin <base>` first if `origin/<base>` is missing), say which base you used, and say so rather than reporting none if it still cannot be resolved. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins. With no profile, the defaults below apply
 4. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
 
 ### Phase 2: Two-Pass Review (parallel subagents)
