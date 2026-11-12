@@ -1,8 +1,8 @@
 ---
 name: hk-code-review
-description: "[v1.2.0] Review branch diff against base. Finds bugs, security, and design issues. Offers mechanical fixes (applied on approval or with --fix), asks before design changes."
+description: "[v1.3.0] Review branch diff against base. Finds bugs, security, and design issues. Offers mechanical fixes (applied on approval or with --fix), asks before design changes."
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   source: "shared"
 ---
 
@@ -106,8 +106,9 @@ Three phases. Phase 1 and the two Phase 2 agents run in parallel where possible.
 Read these in parallel (use Agent tool for the diff if it's large):
 
 1. **The diff**: `git diff $MERGE_BASE` plus the files listed under UNTRACKED (or the PR / range diff)
-2. **CLAUDE.md**: Read the project's CLAUDE.md for conventions and architecture
-3. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
+2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for conventions and architecture
+3. **Review profile**: Read `.claude/review-profile.md` or `docs/review-profile.md` if the preamble found one. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins
+4. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
 
 ### Phase 2: Two-Pass Review (parallel subagents)
 
@@ -321,8 +322,13 @@ Don't manufacture findings to justify the review's existence.
 
 ## Project Conventions
 
-The skill reads the project's CLAUDE.md for architecture and conventions. These
-review-critical patterns come up repeatedly across projects on this stack:
+The skill reads the project's agent instructions and review profile for
+architecture and conventions. When a project ships a review profile
+(`.claude/review-profile.md` or `docs/review-profile.md`), treat it as the
+authoritative project addendum: apply its domain checklists, commands and gates
+on top of the defaults below, and let it override them where the two disagree.
+Without one, the defaults apply unchanged. These review-critical patterns come up
+repeatedly across projects on this stack:
 
 - **No sensitive data in logs** — secrets, credentials, tokens, PII, or any regulated data must never appear in log output, error messages, env vars, or client-visible error responses.
 - **Server-side keys stay server-side** — API keys and secrets used by background tasks (e.g. LLM provider keys) must never appear in frontend bundles, API responses, or git history.

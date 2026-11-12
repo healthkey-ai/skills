@@ -1,8 +1,8 @@
 ---
 name: hk-frontend-review
-description: "[v1.2.0] React/Tailwind/shadcn/React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps, and shadcn misuse."
+description: "[v1.3.0] React/Tailwind/shadcn/React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps, and shadcn misuse."
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   source: "shared"
 ---
 
@@ -54,6 +54,13 @@ if [ -z "$MERGE_BASE" ]; then
 else
   echo "MERGE_BASE: $MERGE_BASE"
 fi
+# Project review profile: the project's own checklists, read in Phase 1.
+REVIEW_PROFILE=""
+for p in .claude/review-profile.md docs/review-profile.md; do
+  if [ -f "$p" ]; then REVIEW_PROFILE="$p"; break; fi
+done
+echo "REVIEW_PROFILE: ${REVIEW_PROFILE:-none}"
+
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "UNCOMMITTED: true"
 else
@@ -107,9 +114,10 @@ Three phases. Phase 1 gathers context, Phase 2 runs two parallel review agents, 
 Read these in parallel:
 
 1. **The diff**: `git diff $MERGE_BASE -- '*.tsx' '*.ts' '*.css'` plus the files listed under UNTRACKED (or the PR / range diff, or scoped to the user's path)
-2. **CLAUDE.md**: Read the project's CLAUDE.md for conventions and architecture
-3. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
-4. **Package versions**: Read `package.json` for React, React Query, Tailwind, and shadcn versions
+2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for conventions and architecture
+3. **Review profile**: Read `.claude/review-profile.md` or `docs/review-profile.md` if the preamble found one. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins
+4. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
+5. **Package versions**: Read `package.json` for React, React Query, Tailwind, and shadcn versions
 
 ### Phase 2: Two-Pass Review (parallel subagents)
 
@@ -385,8 +393,13 @@ Don't manufacture findings to justify the review.
 
 ## Project Conventions
 
-The skill reads the project's CLAUDE.md for the full picture. These patterns
-supplement the general checklist and recur across projects on this stack:
+The skill reads the project's agent instructions and review profile for the
+full picture. When a project ships a review profile
+(`.claude/review-profile.md` or `docs/review-profile.md`), treat it as the
+authoritative project addendum: apply its domain checklists, commands and gates
+on top of the defaults below, and let it override them where the two disagree.
+Without one, the defaults apply unchanged. These patterns supplement the general
+checklist and recur across projects on this stack:
 
 - **Design token system**: many projects use a dual-layer token system — the standalone app defines tokens in `globals.css` as CSS custom properties, and the federation layer maps through a contract-token prefix in a separate CSS file. Always use semantic token classes (`text-foreground`, `bg-muted`, brand/status token classes, etc.) — never raw colors. Confirm the project's actual token names before flagging.
 - **shadcn/ui customization**: projects typically use a customized shadcn setup with their own design system, with components under `src/components/ui/`. Check the project's actual Button (and other) variants and use the semantically correct one.

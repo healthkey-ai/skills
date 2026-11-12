@@ -1,8 +1,8 @@
 ---
 name: hk-infra-review
-description: "[v1.2.0] Review GCP infrastructure and Terraform code for security, cost, reliability, and CI/CD best practices."
+description: "[v1.3.0] Review GCP infrastructure and Terraform code for security, cost, reliability, and CI/CD best practices."
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   source: "shared"
 ---
 
@@ -133,11 +133,11 @@ Read these in parallel:
 
 1. **The diff or full tree**: If reviewing a diff, `git diff $MERGE_BASE -- '*.tf' '*.tfvars'` plus the untracked `.tf` / `.tfvars` files listed in `TF_DIFF` (and untracked workflows in `CI_DIFF`).
    If full audit, read all files under `infra/`.
-2. **CLAUDE.md**: Read the project's CLAUDE.md for architecture context (especially the
-   "Architecture" and "Infrastructure Targets" sections).
-3. **CI/CD workflows**: Read `.github/workflows/deploy-staging.yml` and
+2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for architecture context (especially the "Architecture" and "Infrastructure Targets" sections).
+3. **Review profile**: Read `.claude/review-profile.md` or `docs/review-profile.md` if the preamble found one. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins.
+4. **CI/CD workflows**: Read `.github/workflows/deploy-staging.yml` and
    `.github/workflows/terraform-plan.yml` for deployment pipeline context.
-4. **Terraform state backend**: Read `infra/envs/*/backend.tf` to understand state configuration.
+5. **Terraform state backend**: Read `infra/envs/*/backend.tf` to understand state configuration.
 
 ### Phase 2: Three-Pass Review (parallel subagents)
 
@@ -407,7 +407,12 @@ Don't manufacture findings to justify the review's existence.
 
 ## Project Conventions
 
-The skill reads the project's CLAUDE.md for the full picture. These review-critical
+The skill reads the project's agent instructions and review profile for the
+full picture. When a project ships a review profile (`.claude/review-profile.md`
+or `docs/review-profile.md`), treat it as the authoritative project addendum:
+apply its domain checklists, commands and gates on top of the defaults below,
+and let it override them where the two disagree. Without one, the defaults
+apply unchanged. These review-critical
 patterns recur across GCP/Terraform projects on this stack:
 
 - **Multiple services, one GCP project**: when several services share a Cloud SQL instance,

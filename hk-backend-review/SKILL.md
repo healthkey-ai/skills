@@ -1,8 +1,8 @@
 ---
 name: hk-backend-review
-description: "[v1.2.0] Python/Django/DRF/Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeouts, serializer drift, and security issues."
+description: "[v1.3.0] Python/Django/DRF/Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeouts, serializer drift, and security issues."
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   source: "shared"
 ---
 
@@ -116,10 +116,11 @@ Three phases. Phase 1 gathers context, Phase 2 runs two parallel review agents, 
 Read these in parallel:
 
 1. **The diff**: `git diff $MERGE_BASE -- '*.py' '*.sql'` plus the files listed under UNTRACKED (or the PR / range diff, or scoped to the user's path)
-2. **CLAUDE.md**: Read the project's CLAUDE.md for conventions and architecture
-3. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
-4. **Settings**: Read the Django settings file(s) for database, celery, middleware, and auth configuration
-5. **requirements/pyproject**: Check dependency versions (Django, DRF, Celery, etc.)
+2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for conventions and architecture
+3. **Review profile**: Read `.claude/review-profile.md` or `docs/review-profile.md` if the preamble found one. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins
+4. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
+5. **Settings**: Read the Django settings file(s) for database, celery, middleware, and auth configuration
+6. **requirements/pyproject**: Check dependency versions (Django, DRF, Celery, etc.)
 
 ### Phase 2: Two-Pass Review (parallel subagents)
 
@@ -444,7 +445,12 @@ Don't manufacture findings to justify the review.
 
 ## Project Conventions
 
-The skill reads the project's CLAUDE.md for the full picture. These patterns
+The skill reads the project's agent instructions and review profile for the
+full picture. When a project ships a review profile (`.claude/review-profile.md`
+or `docs/review-profile.md`), treat it as the authoritative project addendum:
+apply its domain checklists, commands and gates on top of the defaults below,
+and let it override them where the two disagree. Without one, the defaults
+apply unchanged. These patterns
 supplement the general checklist and recur across projects on this stack:
 
 - **No sensitive data in logs**: secrets, credentials, tokens, PII, or any regulated data must never appear in log output, error messages, Celery task arguments/results, or API error responses. Treat this as a security concern, not a code quality nit.
