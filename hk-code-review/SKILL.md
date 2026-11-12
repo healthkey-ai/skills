@@ -1,8 +1,8 @@
 ---
 name: hk-code-review
-description: "[v1.2.0] Review branch diff against base. Finds bugs, security, and design issues. Offers mechanical fixes (applied on approval or with --fix), asks before design changes."
+description: "[v1.3.0] Review branch diff against base. Finds bugs, security, and design issues. Offers mechanical fixes (applied on approval or with --fix), asks before design changes."
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   source: "shared"
 ---
 
@@ -42,18 +42,66 @@ fi
 BASE=${BASE:-$DEFAULT}
 echo "BASE: ${BASE:-unknown}"
 
-# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
-# The explicit refspec also works in single-branch clones.
-if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
+# Fetch the base once, before the merge-base and the profile are read: a stale
+# or missing ref would otherwise review a diff against one base and apply the
+# gate from another. The explicit refspec also works in single-branch clones.
+BASE_REF=""
+BASE_FRESH=""
+if [ -n "$BASE" ]; then
   # Braces matter: zsh would read "$BASE:r" as the :r (strip extension) modifier.
-  git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null || true
+  if git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null; then
+    BASE_FRESH=yes
+  fi
+  if git rev-parse --verify -q "origin/${BASE}" >/dev/null; then
+    BASE_REF="origin/${BASE}"
+  fi
 fi
+
+# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
 MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
 if [ -z "$MERGE_BASE" ]; then
   echo "NO_BASE: true"
 else
   echo "MERGE_BASE: $MERGE_BASE"
 fi
+
+# Project review profile: the project's own checklists, read in Phase 1.
+# The base copy is authoritative, so the diff cannot supply the gate it is
+# reviewed against; the working-tree copy is used only when the base has no
+# profile, which is how a project adopts one.
+REVIEW_PROFILE=""
+REVIEW_PROFILE_SOURCE="none"
+if [ -n "$BASE_REF" ]; then
+  for p in .claude/review-profile.md docs/review-profile.md; do
+    if git cat-file -e "${BASE_REF}:${p}" 2>/dev/null; then
+      REVIEW_PROFILE="${BASE_REF}:${p}"
+      if [ -n "$BASE_FRESH" ]; then
+        REVIEW_PROFILE_SOURCE="base"
+      else
+        REVIEW_PROFILE_SOURCE="base (fetch failed; may be stale)"
+      fi
+      break
+    fi
+  done
+fi
+if [ -z "$REVIEW_PROFILE" ]; then
+  for p in .claude/review-profile.md docs/review-profile.md; do
+    if [ -f "$p" ]; then
+      REVIEW_PROFILE="$p"
+      if [ -n "$BASE_REF" ] && [ -n "$BASE_FRESH" ]; then
+        REVIEW_PROFILE_SOURCE="working tree (base has no profile)"
+      elif [ -n "$BASE_REF" ]; then
+        REVIEW_PROFILE_SOURCE="working tree (base fetch failed; unverified)"
+      else
+        REVIEW_PROFILE_SOURCE="working tree (base unavailable)"
+      fi
+      break
+    fi
+  done
+fi
+echo "REVIEW_PROFILE: ${REVIEW_PROFILE:-none}"
+echo "REVIEW_PROFILE_SOURCE: $REVIEW_PROFILE_SOURCE"
+
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "UNCOMMITTED: true"
 else
@@ -106,8 +154,9 @@ Three phases. Phase 1 and the two Phase 2 agents run in parallel where possible.
 Read these in parallel (use Agent tool for the diff if it's large):
 
 1. **The diff**: `git diff $MERGE_BASE` plus the files listed under UNTRACKED (or the PR / range diff)
-2. **CLAUDE.md**: Read the project's CLAUDE.md for conventions and architecture
-3. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
+2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for conventions and architecture. If the diff modifies them, read the base copy for conventions; report the edit only when it relaxes a rule the diff relies on, and when the base has no such file review the whole file as the proposal
+3. **Review profile**: Read the profile the preamble reported. When the path starts with `origin/`, read it with `git show <ref>`: the base copy is deliberate, so a diff cannot relax the gate it is reviewed against. For a PR number or an explicit range, resolve the profile against **that** base rather than the one the preamble detected (`git fetch origin <base>` first if `origin/<base>` is missing), say which base you used, and say so rather than reporting none if it still cannot be resolved. If `REVIEW_PROFILE_SOURCE` is not `base`, name the case: a working-tree copy whose base was unavailable or stale is not the project's gate. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins. With no profile, the defaults below apply
+4. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
 
 ### Phase 2: Two-Pass Review (parallel subagents)
 
@@ -115,8 +164,9 @@ Launch TWO agents in parallel:
 
 **Agent A — Structured Review**
 
-Prompt the agent with the full diff and CLAUDE.md context. It reviews against
-this checklist (DO NOT depend on any external checklist file):
+Prompt the agent with the full diff, the agent instructions and the review profile. It reviews against
+this checklist (do not fetch any checklist beyond the project review profile
+supplied above):
 
 ```
 REVIEW CHECKLIST (check every item against the diff):
@@ -201,7 +251,8 @@ FIX: <exact code change if fixable, or recommendation if not>
 
 **Agent B — Adversarial Review**
 
-A second agent that ONLY looks for things Agent A would miss:
+A second agent that ONLY looks for things Agent A would miss. Give it the same
+diff, agent instructions and review profile:
 
 - Interactions between changed files (e.g., frontend types expect a field the serializer doesn't send)
 - Subtle state management bugs (React Query cache coherence, stale closures, refetchInterval timing)
@@ -321,8 +372,13 @@ Don't manufacture findings to justify the review's existence.
 
 ## Project Conventions
 
-The skill reads the project's CLAUDE.md for architecture and conventions. These
-review-critical patterns come up repeatedly across projects on this stack:
+The skill reads the project's agent instructions and review profile for
+architecture and conventions. When a project ships a review profile
+(`.claude/review-profile.md` or `docs/review-profile.md`), treat it as the
+authoritative project addendum: apply its domain checklists, commands and gates
+on top of the defaults below, and let it override them where the two disagree.
+Without one, the defaults apply unchanged. These review-critical patterns come up
+repeatedly across projects on this stack:
 
 - **No sensitive data in logs** — secrets, credentials, tokens, PII, or any regulated data must never appear in log output, error messages, env vars, or client-visible error responses.
 - **Server-side keys stay server-side** — API keys and secrets used by background tasks (e.g. LLM provider keys) must never appear in frontend bundles, API responses, or git history.

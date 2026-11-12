@@ -1,15 +1,37 @@
 # Skills
 
-Shared Claude Code review skills for Django/DRF/Celery + React/Tailwind/shadcn projects on GCP. Project-agnostic — each skill reads the target project's CLAUDE.md for conventions.
+Shared Claude Code review skills for Django/DRF/Celery + React/Tailwind/shadcn projects on GCP. Project-agnostic — each skill reads the target project's agent instructions (`AGENTS.md`, else `CLAUDE.md`) and an optional project review profile for conventions.
 
 ## Available Skills
 
 | Skill | Version | Source | Description |
 |-------|---------|--------|-------------|
-| `hk-code-review` | 1.2.0 | shared | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Offers mechanical fixes (applied on approval, or immediately with `--fix`), asks before design changes. |
-| `hk-backend-review` | 1.2.0 | shared | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
-| `hk-frontend-review` | 1.2.0 | shared | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
-| `hk-infra-review` | 1.2.0 | shared | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
+| `hk-code-review` | 1.3.0 | shared | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Offers mechanical fixes (applied on approval, or immediately with `--fix`), asks before design changes. |
+| `hk-backend-review` | 1.3.0 | shared | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
+| `hk-frontend-review` | 1.3.0 | shared | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
+| `hk-infra-review` | 1.3.0 | shared | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
+| `hk-security-review` | 1.0.0 | shared | Security control review (auth, authorization, throttling, sessions, secrets, gates). Proves the control is invoked and enforces its invariant; requires a test that fails without the fix. |
+
+## Project Review Profile
+
+A project can ship its own addendum at `.claude/review-profile.md` or
+`docs/review-profile.md`. Within one source, `.claude/` wins when both exist;
+across sources, the **base copy always wins** over any working-tree copy,
+whichever path it sits at. From v1.3 the four stack skills read it in Phase 1
+and treat it as authoritative for that project: domain checklists, commands,
+gates, known failure modes, and repository-specific gates override the generic
+conventions where the two disagree. `hk-security-review` reads it too, from
+1.0.0. Without one, the generic conventions apply unchanged.
+
+The base copy is read on purpose: a pull request that edits the profile is
+reviewed against the gate it is changing, not against the version it is
+proposing. The working-tree copy is used only when the base has no profile
+(how a project adopts one). `REVIEW_PROFILE_SOURCE` is one of `base`,
+`base (fetch failed; may be stale)`, `working tree (base has no profile)`,
+`working tree (base fetch failed; unverified)` or
+`working tree (base unavailable)`. When it is a working-tree value, say whether
+the profile file is itself part of the diff: a branch that adds its own profile
+is proposing a gate, not applying an existing one.
 
 ## Install
 
@@ -92,6 +114,7 @@ After installing, invoke a skill in Claude Code with its slash command:
 /hk-backend-review
 /hk-frontend-review
 /hk-infra-review
+/hk-security-review
 ```
 
 Each skill accepts optional arguments:
@@ -103,9 +126,12 @@ Each skill accepts optional arguments:
 /hk-backend-review apps/<app>/   # scope to a directory
 /hk-infra-review full            # audit entire infra/ tree
 /hk-frontend-review --fix        # apply mechanical fixes without asking
+/hk-security-review dev..HEAD    # control code; no --fix: each fix starts with a failing test
 ```
 
 Reviews never edit files unless you approve the proposed fixes or pass `--fix`.
+`hk-security-review` has no fix mode at all: every control fix starts with a
+test that fails without it.
 
 ## Metadata
 

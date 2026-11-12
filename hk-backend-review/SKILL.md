@@ -1,8 +1,8 @@
 ---
 name: hk-backend-review
-description: "[v1.2.0] Python/Django/DRF/Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeouts, serializer drift, and security issues."
+description: "[v1.3.0] Python/Django/DRF/Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeouts, serializer drift, and security issues."
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   source: "shared"
 ---
 
@@ -42,18 +42,66 @@ fi
 BASE=${BASE:-$DEFAULT}
 echo "BASE: ${BASE:-unknown}"
 
-# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
-# The explicit refspec also works in single-branch clones.
-if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
+# Fetch the base once, before the merge-base and the profile are read: a stale
+# or missing ref would otherwise review a diff against one base and apply the
+# gate from another. The explicit refspec also works in single-branch clones.
+BASE_REF=""
+BASE_FRESH=""
+if [ -n "$BASE" ]; then
   # Braces matter: zsh would read "$BASE:r" as the :r (strip extension) modifier.
-  git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null || true
+  if git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null; then
+    BASE_FRESH=yes
+  fi
+  if git rev-parse --verify -q "origin/${BASE}" >/dev/null; then
+    BASE_REF="origin/${BASE}"
+  fi
 fi
+
+# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
 MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
 if [ -z "$MERGE_BASE" ]; then
   echo "NO_BASE: true"
 else
   echo "MERGE_BASE: $MERGE_BASE"
 fi
+
+# Project review profile: the project's own checklists, read in Phase 1.
+# The base copy is authoritative, so the diff cannot supply the gate it is
+# reviewed against; the working-tree copy is used only when the base has no
+# profile, which is how a project adopts one.
+REVIEW_PROFILE=""
+REVIEW_PROFILE_SOURCE="none"
+if [ -n "$BASE_REF" ]; then
+  for p in .claude/review-profile.md docs/review-profile.md; do
+    if git cat-file -e "${BASE_REF}:${p}" 2>/dev/null; then
+      REVIEW_PROFILE="${BASE_REF}:${p}"
+      if [ -n "$BASE_FRESH" ]; then
+        REVIEW_PROFILE_SOURCE="base"
+      else
+        REVIEW_PROFILE_SOURCE="base (fetch failed; may be stale)"
+      fi
+      break
+    fi
+  done
+fi
+if [ -z "$REVIEW_PROFILE" ]; then
+  for p in .claude/review-profile.md docs/review-profile.md; do
+    if [ -f "$p" ]; then
+      REVIEW_PROFILE="$p"
+      if [ -n "$BASE_REF" ] && [ -n "$BASE_FRESH" ]; then
+        REVIEW_PROFILE_SOURCE="working tree (base has no profile)"
+      elif [ -n "$BASE_REF" ]; then
+        REVIEW_PROFILE_SOURCE="working tree (base fetch failed; unverified)"
+      else
+        REVIEW_PROFILE_SOURCE="working tree (base unavailable)"
+      fi
+      break
+    fi
+  done
+fi
+echo "REVIEW_PROFILE: ${REVIEW_PROFILE:-none}"
+echo "REVIEW_PROFILE_SOURCE: $REVIEW_PROFILE_SOURCE"
+
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "UNCOMMITTED: true"
 else
@@ -116,10 +164,11 @@ Three phases. Phase 1 gathers context, Phase 2 runs two parallel review agents, 
 Read these in parallel:
 
 1. **The diff**: `git diff $MERGE_BASE -- '*.py' '*.sql'` plus the files listed under UNTRACKED (or the PR / range diff, or scoped to the user's path)
-2. **CLAUDE.md**: Read the project's CLAUDE.md for conventions and architecture
-3. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
-4. **Settings**: Read the Django settings file(s) for database, celery, middleware, and auth configuration
-5. **requirements/pyproject**: Check dependency versions (Django, DRF, Celery, etc.)
+2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for conventions and architecture. If the diff modifies them, read the base copy for conventions; report the edit only when it relaxes a rule the diff relies on, and when the base has no such file review the whole file as the proposal
+3. **Review profile**: Read the profile the preamble reported. When the path starts with `origin/`, read it with `git show <ref>`: the base copy is deliberate, so a diff cannot relax the gate it is reviewed against. For a PR number or an explicit range, resolve the profile against **that** base rather than the one the preamble detected (`git fetch origin <base>` first if `origin/<base>` is missing), say which base you used, and say so rather than reporting none if it still cannot be resolved. If `REVIEW_PROFILE_SOURCE` is not `base`, name the case: a working-tree copy whose base was unavailable or stale is not the project's gate. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins. With no profile, the defaults below apply
+4. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
+5. **Settings**: Read the Django settings file(s) for database, celery, middleware, and auth configuration
+6. **requirements/pyproject**: Check dependency versions (Django, DRF, Celery, etc.)
 
 ### Phase 2: Two-Pass Review (parallel subagents)
 
@@ -127,7 +176,7 @@ Launch TWO agents in parallel:
 
 **Agent A — Structured Best Practices Review**
 
-Prompt the agent with the full diff and project context. It reviews against this checklist:
+Prompt the agent with the full diff, the agent instructions and the review profile resolved in Phase 1. It reviews against this checklist:
 
 ```
 DJANGO ORM & DATABASE QUERIES
@@ -444,7 +493,12 @@ Don't manufacture findings to justify the review.
 
 ## Project Conventions
 
-The skill reads the project's CLAUDE.md for the full picture. These patterns
+The skill reads the project's agent instructions and review profile for the
+full picture. When a project ships a review profile (`.claude/review-profile.md`
+or `docs/review-profile.md`), treat it as the authoritative project addendum:
+apply its domain checklists, commands and gates on top of the defaults below,
+and let it override them where the two disagree. Without one, the defaults
+apply unchanged. These patterns
 supplement the general checklist and recur across projects on this stack:
 
 - **No sensitive data in logs**: secrets, credentials, tokens, PII, or any regulated data must never appear in log output, error messages, Celery task arguments/results, or API error responses. Treat this as a security concern, not a code quality nit.

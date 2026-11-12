@@ -113,10 +113,94 @@ dirty_check() { # <skill> <regex>...
   out=$(cd "$WORK/dirty/app" && GH_PR_BASE="" bash "$WORK/$s.sh" 2>&1)
   for re in "$@"; do expect "$s [dirty]" "$out" "$re"; done
 }
-dirty_check hk-code-review     '^NO_DIFF: false$' '^UNCOMMITTED: true$' '^app/migrations/0002_x\.py$' '^infra/prod\.tfvars$' '^FILES_CHANGED: 4$'
-dirty_check hk-backend-review  '^FILES_CHANGED: 2$' '^HAS_MIGRATIONS: true$' '^app/migrations/0002_x\.py$'
-dirty_check hk-frontend-review '^FILES_CHANGED: 1$'
-dirty_check hk-infra-review    '^TF_DIFF: found$' '^infra/prod\.tfvars$'
+dirty_check hk-code-review     '^NO_DIFF: false$' '^UNCOMMITTED: true$' '^app/migrations/0002_x\.py$' '^infra/prod\.tfvars$' '^FILES_CHANGED: 4$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+dirty_check hk-backend-review  '^FILES_CHANGED: 2$' '^HAS_MIGRATIONS: true$' '^app/migrations/0002_x\.py$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+dirty_check hk-frontend-review '^FILES_CHANGED: 1$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+dirty_check hk-infra-review    '^TF_DIFF: found$' '^infra/prod\.tfvars$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+dirty_check hk-security-review '^FILES_CHANGED: 4$' '^CONTROL_FILES: none$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+
+# A control-shaped filename is reported even though it is only a hint.
+echo 'x = 1' > "$WORK/dirty/app/auth.py"
+out=$(cd "$WORK/dirty/app" && GH_PR_BASE="" bash "$WORK/hk-security-review.sh" 2>&1)
+expect "hk-security-review [control]" "$out" '^CONTROL_FILES:$'
+expect "hk-security-review [control]" "$out" '^app/auth\.py$'
+
+# The profile block is self-contained per skill; keep the five copies identical.
+profile_block() {
+  awk '/^# Project review profile:/{f=1} f{print} f&&/^echo "REVIEW_PROFILE_SOURCE:/{exit}' "$1"
+}
+first=""; first_file=""
+for f in "$REPO_ROOT"/*/SKILL.md; do
+  block=$(profile_block "$f")
+  checks=$((checks + 1))
+  if [ -z "$block" ]; then
+    echo "FAIL  profile block missing: $f"
+    fails=$((fails + 1))
+    continue
+  fi
+  if [ -z "$first_file" ]; then first=$block; first_file=$f; continue; fi
+  if [ "$block" != "$first" ]; then
+    echo "FAIL  profile block differs: $f vs $first_file"
+    fails=$((fails + 1))
+  fi
+done
+
+# The base copy wins; the working-tree copy is used only when the base has
+# none (a project adopting a profile). Both matter: the first stops a diff from
+# deleting, relocating or relaxing the gate it is being reviewed against.
+profile_check() { # <repo> <label> <regex>...
+  local repo=$1 label=$2 s out sh; shift 2
+  for script in "$WORK"/*.sh; do
+    s=$(basename "$script" .sh)
+    for sh in bash zsh; do
+      out=$(cd "$WORK/$repo" && GH_PR_BASE="" "$sh" "$script" 2>&1)
+      for re in "$@"; do expect "$s [$label $sh]" "$out" "$re"; done
+    done
+  done
+}
+
+profile_check dirty "profile-none" '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+mkdir -p "$WORK/dirty/docs" && echo p > "$WORK/dirty/docs/review-profile.md"
+profile_check dirty "profile-worktree" '^REVIEW_PROFILE: docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: working tree \(base has no profile\)$'
+mkdir -p "$WORK/dirty/.claude" && echo p > "$WORK/dirty/.claude/review-profile.md"
+profile_check dirty "profile-precedence" '^REVIEW_PROFILE: \.claude/review-profile\.md$'
+
+# No remote at all: the working-tree copy is usable but unverified.
+mkdir -p "$WORK/noremote/docs" && echo p > "$WORK/noremote/docs/review-profile.md"
+profile_check noremote "profile-no-remote" '^REVIEW_PROFILE: docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: working tree \(base unavailable\)$'
+
+# A profile committed on the base stays authoritative while a branch edits,
+# deletes or relocates it.
+git clone -q "$WORK/o.git" "$WORK/profile" 2>/dev/null
+( cd "$WORK/profile" && git checkout -q -B dev origin/dev &&
+  mkdir -p docs && echo p > docs/review-profile.md &&
+  git add docs/review-profile.md && git commit -q -m profile && git push -q origin dev &&
+  git checkout -q -B feat-profile origin/dev &&
+  echo changed >> docs/review-profile.md && git add docs/review-profile.md && git commit -q -m edit )
+profile_check profile "profile-base" '^BASE: dev$' '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
+
+# A base that cannot be fetched is read, but labelled as possibly stale.
+git clone -q "$WORK/o.git" "$WORK/broken" 2>/dev/null
+git -C "$WORK/broken" remote set-url origin "$WORK/missing.git"
+profile_check broken "profile-fetch-failed" '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base \(fetch failed; may be stale\)$'
+
+( cd "$WORK/profile" && git checkout -q -B feat-delete origin/dev &&
+  git rm -q docs/review-profile.md && git commit -q -m delete )
+profile_check profile "profile-deleted" '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
+
+( cd "$WORK/profile" && git checkout -q -B feat-relocate origin/dev &&
+  mkdir -p .claude && git mv docs/review-profile.md .claude/review-profile.md &&
+  git commit -q -m relocate )
+profile_check profile "profile-relocated" '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
+
+# With both paths on the base, .claude/ wins there too -- even when the branch
+# tries to remove docs/ and keep only its own copy.
+( cd "$WORK/profile" && git checkout -q -B dev origin/dev &&
+  mkdir -p .claude && echo p > .claude/review-profile.md &&
+  git add .claude && git commit -q -m claude-profile && git push -q origin dev &&
+  git checkout -q -B feat-both origin/dev &&
+  git rm -q docs/review-profile.md && git commit -q -m drop-docs )
+profile_check profile "profile-base-precedence" '^REVIEW_PROFILE: origin/dev:\.claude/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
 
 echo "$checks checks, $fails failed"
 [ "$fails" -eq 0 ]
