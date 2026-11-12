@@ -55,16 +55,30 @@ else
   echo "MERGE_BASE: $MERGE_BASE"
 fi
 # Project review profile: the project's own checklists, read in Phase 1.
-# Search the base branch first: a diff must not be able to delete, relocate or
-# relax the gate it is reviewed against. Fall back to the working tree only
-# when the base has no profile, which is how a project adopts one.
+# Fetch the base first: a stale or missing ref would silently let the diff
+# supply the gate it is reviewed against. The working-tree copy is used only
+# when the base genuinely has no profile, which is how a project adopts one.
 REVIEW_PROFILE=""
 REVIEW_PROFILE_SOURCE="none"
+BASE_REF=""
+BASE_FRESH=""
 if [ -n "$BASE" ]; then
+  if git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null; then
+    BASE_FRESH=yes
+  fi
+  if git rev-parse --verify -q "origin/${BASE}" >/dev/null; then
+    BASE_REF="origin/${BASE}"
+  fi
+fi
+if [ -n "$BASE_REF" ]; then
   for p in .claude/review-profile.md docs/review-profile.md; do
-    if git cat-file -e "origin/${BASE}:${p}" 2>/dev/null; then
-      REVIEW_PROFILE="origin/${BASE}:${p}"
-      REVIEW_PROFILE_SOURCE="base"
+    if git cat-file -e "${BASE_REF}:${p}" 2>/dev/null; then
+      REVIEW_PROFILE="${BASE_REF}:${p}"
+      if [ -n "$BASE_FRESH" ]; then
+        REVIEW_PROFILE_SOURCE="base"
+      else
+        REVIEW_PROFILE_SOURCE="base (fetch failed; may be stale)"
+      fi
       break
     fi
   done
@@ -73,7 +87,13 @@ if [ -z "$REVIEW_PROFILE" ]; then
   for p in .claude/review-profile.md docs/review-profile.md; do
     if [ -f "$p" ]; then
       REVIEW_PROFILE="$p"
-      REVIEW_PROFILE_SOURCE="working tree"
+      if [ -n "$BASE_REF" ] && [ -n "$BASE_FRESH" ]; then
+        REVIEW_PROFILE_SOURCE="working tree (base has no profile)"
+      elif [ -n "$BASE_REF" ]; then
+        REVIEW_PROFILE_SOURCE="working tree (base fetch failed; unverified)"
+      else
+        REVIEW_PROFILE_SOURCE="working tree (base unavailable)"
+      fi
       break
     fi
   done
@@ -161,14 +181,15 @@ Read these in parallel:
 1. **The diff or full tree**: If reviewing a diff, `git diff $MERGE_BASE -- '*.tf' '*.tfvars'` plus the untracked `.tf` / `.tfvars` files listed in `TF_DIFF` (and untracked workflows in `CI_DIFF`).
    If full audit, read all files under `infra/`.
 2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for architecture context (especially the "Architecture" and "Infrastructure Targets" sections).
-3. **Review profile**: Read the profile the preamble reported. When the path starts with `origin/`, read it with `git show <ref>`: the base copy is deliberate, so a diff cannot relax the gate it is reviewed against. For a PR number or an explicit range, resolve the profile against **that** base rather than the one the preamble detected (`git fetch origin <base>` first if `origin/<base>` is missing), say which base you used, and say so rather than reporting none if it still cannot be resolved. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins. With no profile, the defaults below apply.
+3. **Review profile**: Read the profile the preamble reported. When the path starts with `origin/`, read it with `git show <ref>`: the base copy is deliberate, so a diff cannot relax the gate it is reviewed against. For a PR number or an explicit range, resolve the profile against **that** base rather than the one the preamble detected (`git fetch origin <base>` first if `origin/<base>` is missing), say which base you used, and say so rather than reporting none if it still cannot be resolved. If `REVIEW_PROFILE_SOURCE` is not `base`, name the case: a working-tree copy whose base was unavailable or stale is not the project's gate. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins. With no profile, the defaults below apply.
 4. **CI/CD workflows**: Read `.github/workflows/deploy-staging.yml` and
    `.github/workflows/terraform-plan.yml` for deployment pipeline context.
 5. **Terraform state backend**: Read `infra/envs/*/backend.tf` to understand state configuration.
 
 ### Phase 2: Three-Pass Review (parallel subagents)
 
-Launch THREE agents in parallel:
+Launch THREE agents in parallel. Give each agent the diff (or the full tree), the
+agent instructions and the review profile resolved in Phase 1.
 
 **Agent A — Security & IAM Review**
 

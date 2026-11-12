@@ -82,16 +82,30 @@ else
   echo "MERGE_BASE: $MERGE_BASE"
 fi
 # Project review profile: the project's own checklists, read in Phase 1.
-# Search the base branch first: a diff must not be able to delete, relocate or
-# relax the gate it is reviewed against. Fall back to the working tree only
-# when the base has no profile, which is how a project adopts one.
+# Fetch the base first: a stale or missing ref would silently let the diff
+# supply the gate it is reviewed against. The working-tree copy is used only
+# when the base genuinely has no profile, which is how a project adopts one.
 REVIEW_PROFILE=""
 REVIEW_PROFILE_SOURCE="none"
+BASE_REF=""
+BASE_FRESH=""
 if [ -n "$BASE" ]; then
+  if git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null; then
+    BASE_FRESH=yes
+  fi
+  if git rev-parse --verify -q "origin/${BASE}" >/dev/null; then
+    BASE_REF="origin/${BASE}"
+  fi
+fi
+if [ -n "$BASE_REF" ]; then
   for p in .claude/review-profile.md docs/review-profile.md; do
-    if git cat-file -e "origin/${BASE}:${p}" 2>/dev/null; then
-      REVIEW_PROFILE="origin/${BASE}:${p}"
-      REVIEW_PROFILE_SOURCE="base"
+    if git cat-file -e "${BASE_REF}:${p}" 2>/dev/null; then
+      REVIEW_PROFILE="${BASE_REF}:${p}"
+      if [ -n "$BASE_FRESH" ]; then
+        REVIEW_PROFILE_SOURCE="base"
+      else
+        REVIEW_PROFILE_SOURCE="base (fetch failed; may be stale)"
+      fi
       break
     fi
   done
@@ -100,7 +114,13 @@ if [ -z "$REVIEW_PROFILE" ]; then
   for p in .claude/review-profile.md docs/review-profile.md; do
     if [ -f "$p" ]; then
       REVIEW_PROFILE="$p"
-      REVIEW_PROFILE_SOURCE="working tree"
+      if [ -n "$BASE_REF" ] && [ -n "$BASE_FRESH" ]; then
+        REVIEW_PROFILE_SOURCE="working tree (base has no profile)"
+      elif [ -n "$BASE_REF" ]; then
+        REVIEW_PROFILE_SOURCE="working tree (base fetch failed; unverified)"
+      else
+        REVIEW_PROFILE_SOURCE="working tree (base unavailable)"
+      fi
       break
     fi
   done
@@ -183,11 +203,15 @@ Read these in parallel:
 2. **Agent instructions and review profile**: `AGENTS.md` (else `CLAUDE.md`),
    and the profile the preamble reported. When its path starts with `origin/`,
    read it with `git show <ref>`: the base copy is deliberate, so the diff
-   cannot relax the gate it is reviewed against. For a PR number or an explicit
+   cannot relax the gate it is reviewed against. If the diff modifies the agent
+   instructions, read the base copy for conventions and treat the change itself
+   as a finding. For a PR number or an explicit
    range, resolve the profile against that base (`git fetch origin <base>`
    first if the ref is missing), say which base you used, and say so rather
-   than reporting none if it still cannot be resolved. The project may name the
-   control's threat model, known gaps and invariants.
+   than reporting none if it still cannot be resolved. If
+   `REVIEW_PROFILE_SOURCE` is not `base`, name the case: a working-tree copy
+   whose base was unavailable or stale is not the project's gate. The project
+   may name the control's threat model, known gaps and invariants.
 3. **Control claims**: collect every statement that the change *does* something
    protective — PR description, commit messages, docstrings, comments, config
    names, test names. Write each one down. A claim with no line of code and no
@@ -311,15 +335,24 @@ Rules:
 
 1. **Run the evidence.** A test that passes with the fix is not evidence until
    it fails without it: revert, run, confirm red, restore. Do this in an
-   isolated copy — `git worktree add <tmp> <reviewed-head>` (or a temporary
-   clone) plus the untracked env files the tests need; a plain worktree has the
-   tracked tree only. Remove it with `git worktree remove <tmp>` afterwards. It
-   writes only `.git/worktrees` metadata into the repository; the checked-out
-   tree is never changed and committed work is never reverted in place. If the
-   checkout has uncommitted work, say how you will isolate it before touching
-   anything. Record the command and the result. For a control whose test cannot
-   be run in this environment, say so and lower confidence instead of upgrading
-   it by reading.
+   isolated copy outside the repository: `tmp=$(mktemp -d)` and
+   `git worktree add --detach "$tmp/wt" <reviewed-head>` (or a temporary
+   clone). A plain worktree has tracked files only, and a branch that is
+   already checked out cannot be added without `--detach`. Remove it with
+   `git worktree remove --force "$tmp/wt" || git worktree prune`; that also
+   deletes whatever the test run left behind. It writes only `.git/worktrees`
+   metadata into the repository; the checked-out tree is never changed and
+   committed work is never reverted in place.
+
+   For the default working-tree review, apply the diff inside the worktree
+   (`git diff "$MERGE_BASE" | git -C "$tmp/wt" apply`) and copy untracked
+   sources. Pass configuration as environment variables rather than copying
+   `.env` files; if one must be copied, keep it outside the repository,
+   `chmod 600`, and delete it with the worktree. Never revert the user's
+   checkout and never commit to their branch. Name the method used in the
+   evidence row. Record the command and the result. For a control whose test
+   cannot be run in this environment, say so and lower confidence instead of
+   upgrading it by reading.
 2. **Measure end-to-end.** A failure reproduced only at the primitive may be
    unreachable through the request path. Check both before proposing a fix; a
    fix for an unreachable bug hides the reasoning that produced it.
@@ -337,15 +370,16 @@ Rules:
 
 - **9-10**: the failure path is traced end-to-end *and* executed, or a test
   was reverted to prove the control is load-bearing.
-- **7-8**: the bypass is traced through the framework's own code, but not
-  executed (e.g. a subclass omits a check the framework performs).
+- **7-8**: the bypass is traced through the framework's own code and exercised
+  at the primitive (the throttle helper, the backend, the permission class),
+  but not through the full request path.
 - **5-6**: the control reads as unreachable or incomplete, and the assumption
   could not be verified. Show it as unproven, not as a finding of absence.
 - **3-4**: possible issue, needs investigation. Only in a thorough review.
 - **1-2**: style. Never show.
 
-**Display threshold**: findings with confidence >= 5. Anything about a control
-that was never executed cannot exceed 6.
+**Display threshold**: findings with confidence >= 5. A control that was never
+exercised at all cannot exceed 6; one exercised only at the primitive caps at 8.
 
 ### Output Format
 

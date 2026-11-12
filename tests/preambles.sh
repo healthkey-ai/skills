@@ -119,6 +119,27 @@ dirty_check hk-frontend-review '^FILES_CHANGED: 1$' '^REVIEW_PROFILE: none$' '^R
 dirty_check hk-infra-review    '^TF_DIFF: found$' '^infra/prod\.tfvars$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
 dirty_check hk-security-review '^FILES_CHANGED: 4$' '^CONTROL_FILES: none$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
 
+# A control-shaped filename is reported even though it is only a hint.
+echo 'x = 1' > "$WORK/dirty/app/auth.py"
+out=$(cd "$WORK/dirty/app" && GH_PR_BASE="" bash "$WORK/hk-security-review.sh" 2>&1)
+expect "hk-security-review [control]" "$out" '^CONTROL_FILES:$'
+expect "hk-security-review [control]" "$out" '^app/auth\.py$'
+
+# The profile block is self-contained per skill; keep the five copies identical.
+profile_block() {
+  awk '/^# Project review profile:/{f=1} f{print} f&&/^echo "REVIEW_PROFILE_SOURCE:/{exit}' "$1"
+}
+first=""; first_file=""
+for f in "$REPO_ROOT"/*/SKILL.md; do
+  block=$(profile_block "$f")
+  if [ -z "$first" ]; then first=$block; first_file=$f; continue; fi
+  checks=$((checks + 1))
+  if [ "$block" != "$first" ]; then
+    echo "FAIL  profile block differs: $f vs $first_file"
+    fails=$((fails + 1))
+  fi
+done
+
 # The base copy wins; the working-tree copy is used only when the base has
 # none (a project adopting a profile). Both matter: the first stops a diff from
 # deleting, relocating or relaxing the gate it is being reviewed against.
@@ -135,9 +156,13 @@ profile_check() { # <repo> <label> <regex>...
 
 profile_check dirty "profile-none" '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
 mkdir -p "$WORK/dirty/docs" && echo p > "$WORK/dirty/docs/review-profile.md"
-profile_check dirty "profile-worktree" '^REVIEW_PROFILE: docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: working tree$'
+profile_check dirty "profile-worktree" '^REVIEW_PROFILE: docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: working tree \(base has no profile\)$'
 mkdir -p "$WORK/dirty/.claude" && echo p > "$WORK/dirty/.claude/review-profile.md"
 profile_check dirty "profile-precedence" '^REVIEW_PROFILE: \.claude/review-profile\.md$'
+
+# No remote at all: the working-tree copy is usable but unverified.
+mkdir -p "$WORK/noremote/docs" && echo p > "$WORK/noremote/docs/review-profile.md"
+profile_check noremote "profile-no-remote" '^REVIEW_PROFILE: docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: working tree \(base unavailable\)$'
 
 # A profile committed on the base stays authoritative while a branch edits,
 # deletes or relocates it.

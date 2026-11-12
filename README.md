@@ -15,19 +15,20 @@ Shared Claude Code review skills for Django/DRF/Celery + React/Tailwind/shadcn p
 ## Project Review Profile
 
 A project can ship its own addendum at `.claude/review-profile.md` or
-`docs/review-profile.md` (the `.claude/` copy wins when both exist). From v1.3
-every skill reads it in Phase 1 and treats it as authoritative for that project:
-domain checklists, commands, gates, known failure modes, and repository-specific
-gates override the generic conventions where the two disagree. Without one, the
-generic conventions apply unchanged.
+`docs/review-profile.md`. Within one source, `.claude/` wins when both exist;
+across sources, the **base copy always wins** over any working-tree copy,
+whichever path it sits at. From v1.3 the four stack skills read it in Phase 1
+and treat it as authoritative for that project: domain checklists, commands,
+gates, known failure modes, and repository-specific gates override the generic
+conventions where the two disagree. `hk-security-review` reads it too, from
+1.0.0. Without one, the generic conventions apply unchanged.
 
-When the base branch already has the profile, the skills read the **base copy**
-(printed as `origin/<base>:<path>`) instead of the working-tree copy. A pull
-request that edits the profile is therefore reviewed against the gate it is
-changing, not against the version it is proposing.
-
-This keeps the shared engine project-agnostic: stack and domain specifics stay
-in the repository they describe and are reviewed like any other code.
+The base copy is read on purpose: a pull request that edits the profile is
+reviewed against the gate it is changing, not against the version it is
+proposing. The working-tree copy is used only when the base has no profile
+(how a project adopts one). The preamble reports `REVIEW_PROFILE_SOURCE`, and
+`working tree (... unverified)` means the base could not be consulted — that is
+not the project's gate.
 
 ## Install
 
@@ -126,6 +127,8 @@ Each skill accepts optional arguments:
 ```
 
 Reviews never edit files unless you approve the proposed fixes or pass `--fix`.
+`hk-security-review` has no fix mode at all: every control fix starts with a
+test that fails without it.
 
 ## Metadata
 
