@@ -82,19 +82,28 @@ else
   echo "MERGE_BASE: $MERGE_BASE"
 fi
 # Project review profile: the project's own checklists, read in Phase 1.
-# Resolve the path from the working tree, but read the base copy when the base
-# has one: a diff must not be able to relax the gate it is reviewed against.
+# Search the base branch first: a diff must not be able to delete, relocate or
+# relax the gate it is reviewed against. Fall back to the working tree only
+# when the base has no profile, which is how a project adopts one.
 REVIEW_PROFILE=""
-for p in .claude/review-profile.md docs/review-profile.md; do
-  if [ -f "$p" ]; then REVIEW_PROFILE="$p"; break; fi
-done
 REVIEW_PROFILE_SOURCE="none"
-if [ -n "$REVIEW_PROFILE" ]; then
-  REVIEW_PROFILE_SOURCE="working tree"
-  if [ -n "$BASE" ] && git cat-file -e "origin/${BASE}:${REVIEW_PROFILE}" 2>/dev/null; then
-    REVIEW_PROFILE="origin/${BASE}:${REVIEW_PROFILE}"
-    REVIEW_PROFILE_SOURCE="base"
-  fi
+if [ -n "$BASE" ]; then
+  for p in .claude/review-profile.md docs/review-profile.md; do
+    if git cat-file -e "origin/${BASE}:${p}" 2>/dev/null; then
+      REVIEW_PROFILE="origin/${BASE}:${p}"
+      REVIEW_PROFILE_SOURCE="base"
+      break
+    fi
+  done
+fi
+if [ -z "$REVIEW_PROFILE" ]; then
+  for p in .claude/review-profile.md docs/review-profile.md; do
+    if [ -f "$p" ]; then
+      REVIEW_PROFILE="$p"
+      REVIEW_PROFILE_SOURCE="working tree"
+      break
+    fi
+  done
 fi
 echo "REVIEW_PROFILE: ${REVIEW_PROFILE:-none}"
 echo "REVIEW_PROFILE_SOURCE: $REVIEW_PROFILE_SOURCE"
@@ -174,14 +183,17 @@ Read these in parallel:
 2. **Agent instructions and review profile**: `AGENTS.md` (else `CLAUDE.md`),
    and the profile the preamble reported. When its path starts with `origin/`,
    read it with `git show <ref>`: the base copy is deliberate, so the diff
-   cannot relax the gate it is reviewed against. The project may name the
-   control's threat model, known gaps and invariants.
+   cannot relax the gate it is reviewed against. For a PR number or an explicit
+   range, resolve the profile against that base and say which base you used.
+   The project may name the control's threat model, known gaps and invariants.
 3. **Control claims**: collect every statement that the change *does* something
    protective — PR description, commit messages, docstrings, comments, config
    names, test names. Write each one down. A claim with no line of code and no
    test behind it is already a finding.
 4. **Call sites**: start from the preamble's `CONTROL_FILES` hint, then find
-   every path that must pass through each control. A filename that does not
+   every path that must pass through each control. For a PR or an explicit
+   range, recompute that list over the requested diff — the preamble's hint
+   describes the working tree. A filename that does not
    carry the control's name is still a call site. Grep for the helper, decorator,
    middleware or base class; do not assume the
    diff names them. Include admin, management commands, Celery tasks, websocket
@@ -205,8 +217,9 @@ what would have to be true for the enforcement to be skipped. Follow the code
 from the entry point to the deny/allow decision.
 
 **Pass B — fresh-context pass (a separate subagent).** Start an independent
-review agent and give it **only**: the repository path, the range or diff, and
-the checklist below. Do not give it this conversation, the PR description,
+review agent and give it **only**: the repository path, the range or diff, the
+review profile (the base copy the preamble reported, when there is one), and the
+checklist below. Do not give it this conversation, the PR description,
 commit messages, the Phase 1 claim list, or any explanation of why the code is
 shaped this way — those are Pass A's input. Read the control as a stranger
 would: start at the route or task, find the decision, and only then read the
@@ -296,11 +309,12 @@ Rules:
 
 1. **Run the evidence.** A test that passes with the fix is not evidence until
    it fails without it: revert, run, confirm red, restore. Do this in an
-   isolated copy — a throwaway worktree at the reviewed head, or a `git stash`
-   you restore and verify — and never revert committed code in the user's
-   checkout. If the checkout has uncommitted work, stop and say how you will
-   isolate it before touching anything. Record the command and the result. For a
-   control whose test cannot be run in this environment, say so and lower
+   isolated copy — `git worktree add <tmp> <reviewed-head>` (or a temporary
+   clone) plus the untracked env files the tests need; a plain worktree has the
+   tracked tree only. The user's checkout is never modified, and committed work
+   is never reverted in place. If the checkout has uncommitted work, say how you
+   will isolate it before touching anything. Record the command and the result.
+   For a control whose test cannot be run in this environment, say so and lower
    confidence instead of upgrading it by reading.
 2. **Measure end-to-end.** A failure reproduced only at the primitive may be
    unreachable through the request path. Check both before proposing a fix; a

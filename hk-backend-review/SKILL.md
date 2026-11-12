@@ -55,19 +55,28 @@ else
   echo "MERGE_BASE: $MERGE_BASE"
 fi
 # Project review profile: the project's own checklists, read in Phase 1.
-# Resolve the path from the working tree, but read the base copy when the base
-# has one: a diff must not be able to relax the gate it is reviewed against.
+# Search the base branch first: a diff must not be able to delete, relocate or
+# relax the gate it is reviewed against. Fall back to the working tree only
+# when the base has no profile, which is how a project adopts one.
 REVIEW_PROFILE=""
-for p in .claude/review-profile.md docs/review-profile.md; do
-  if [ -f "$p" ]; then REVIEW_PROFILE="$p"; break; fi
-done
 REVIEW_PROFILE_SOURCE="none"
-if [ -n "$REVIEW_PROFILE" ]; then
-  REVIEW_PROFILE_SOURCE="working tree"
-  if [ -n "$BASE" ] && git cat-file -e "origin/${BASE}:${REVIEW_PROFILE}" 2>/dev/null; then
-    REVIEW_PROFILE="origin/${BASE}:${REVIEW_PROFILE}"
-    REVIEW_PROFILE_SOURCE="base"
-  fi
+if [ -n "$BASE" ]; then
+  for p in .claude/review-profile.md docs/review-profile.md; do
+    if git cat-file -e "origin/${BASE}:${p}" 2>/dev/null; then
+      REVIEW_PROFILE="origin/${BASE}:${p}"
+      REVIEW_PROFILE_SOURCE="base"
+      break
+    fi
+  done
+fi
+if [ -z "$REVIEW_PROFILE" ]; then
+  for p in .claude/review-profile.md docs/review-profile.md; do
+    if [ -f "$p" ]; then
+      REVIEW_PROFILE="$p"
+      REVIEW_PROFILE_SOURCE="working tree"
+      break
+    fi
+  done
 fi
 echo "REVIEW_PROFILE: ${REVIEW_PROFILE:-none}"
 echo "REVIEW_PROFILE_SOURCE: $REVIEW_PROFILE_SOURCE"
@@ -135,7 +144,7 @@ Read these in parallel:
 
 1. **The diff**: `git diff $MERGE_BASE -- '*.py' '*.sql'` plus the files listed under UNTRACKED (or the PR / range diff, or scoped to the user's path)
 2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for conventions and architecture
-3. **Review profile**: Read the profile the preamble reported. When the path starts with `origin/`, read it with `git show <ref>`: the base copy is deliberate, so a diff cannot relax the gate it is reviewed against. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins. With no profile, the defaults below apply
+3. **Review profile**: Read the profile the preamble reported. When the path starts with `origin/`, read it with `git show <ref>`: the base copy is deliberate, so a diff cannot relax the gate it is reviewed against. For a PR number or an explicit range, resolve the profile against **that** base rather than the one the preamble detected, and say which base you used. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins. With no profile, the defaults below apply
 4. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
 5. **Settings**: Read the Django settings file(s) for database, celery, middleware, and auth configuration
 6. **requirements/pyproject**: Check dependency versions (Django, DRF, Celery, etc.)

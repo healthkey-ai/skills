@@ -119,15 +119,17 @@ dirty_check hk-frontend-review '^FILES_CHANGED: 1$' '^REVIEW_PROFILE: none$' '^R
 dirty_check hk-infra-review    '^TF_DIFF: found$' '^infra/prod\.tfvars$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
 dirty_check hk-security-review '^FILES_CHANGED: 4$' '^CONTROL_FILES: none$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
 
-# The profile is resolved from the working tree, but a copy that exists on the
-# base wins. Both matter: the first finds a project that just adopted one; the
-# second stops a diff from relaxing the gate it is being reviewed against.
+# The base copy wins; the working-tree copy is used only when the base has
+# none (a project adopting a profile). Both matter: the first stops a diff from
+# deleting, relocating or relaxing the gate it is being reviewed against.
 profile_check() { # <repo> <label> <regex>...
-  local repo=$1 label=$2 s out; shift 2
+  local repo=$1 label=$2 s out sh; shift 2
   for script in "$WORK"/*.sh; do
     s=$(basename "$script" .sh)
-    out=$(cd "$WORK/$repo" && GH_PR_BASE="" bash "$script" 2>&1)
-    for re in "$@"; do expect "$s [$label]" "$out" "$re"; done
+    for sh in bash zsh; do
+      out=$(cd "$WORK/$repo" && GH_PR_BASE="" "$sh" "$script" 2>&1)
+      for re in "$@"; do expect "$s [$label $sh]" "$out" "$re"; done
+    done
   done
 }
 
@@ -136,7 +138,8 @@ profile_check dirty "profile-worktree" '^REVIEW_PROFILE: docs/review-profile\.md
 mkdir -p "$WORK/dirty/.claude" && echo p > "$WORK/dirty/.claude/review-profile.md"
 profile_check dirty "profile-precedence" '^REVIEW_PROFILE: \.claude/review-profile\.md$'
 
-# A profile committed on the base stays authoritative while a branch edits it.
+# A profile committed on the base stays authoritative while a branch edits,
+# deletes or relocates it.
 git clone -q "$WORK/o.git" "$WORK/profile" 2>/dev/null
 ( cd "$WORK/profile" && git checkout -q -B dev origin/dev &&
   mkdir -p docs && echo p > docs/review-profile.md &&
@@ -144,6 +147,15 @@ git clone -q "$WORK/o.git" "$WORK/profile" 2>/dev/null
   git checkout -q -B feat-profile origin/dev &&
   echo changed >> docs/review-profile.md && git add docs/review-profile.md && git commit -q -m edit )
 profile_check profile "profile-base" '^BASE: dev$' '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
+
+( cd "$WORK/profile" && git checkout -q -B feat-delete origin/dev &&
+  git rm -q docs/review-profile.md && git commit -q -m delete )
+profile_check profile "profile-deleted" '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
+
+( cd "$WORK/profile" && git checkout -q -B feat-relocate origin/dev &&
+  mkdir -p .claude && git mv docs/review-profile.md .claude/review-profile.md &&
+  git commit -q -m relocate )
+profile_check profile "profile-relocated" '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
 
 echo "$checks checks, $fails failed"
 [ "$fails" -eq 0 ]
