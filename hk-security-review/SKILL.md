@@ -82,11 +82,22 @@ else
   echo "MERGE_BASE: $MERGE_BASE"
 fi
 # Project review profile: the project's own checklists, read in Phase 1.
+# Resolve the path from the working tree, but read the base copy when the base
+# has one: a diff must not be able to relax the gate it is reviewed against.
 REVIEW_PROFILE=""
 for p in .claude/review-profile.md docs/review-profile.md; do
   if [ -f "$p" ]; then REVIEW_PROFILE="$p"; break; fi
 done
+REVIEW_PROFILE_SOURCE="none"
+if [ -n "$REVIEW_PROFILE" ]; then
+  REVIEW_PROFILE_SOURCE="working tree"
+  if [ -n "$BASE" ] && git cat-file -e "origin/${BASE}:${REVIEW_PROFILE}" 2>/dev/null; then
+    REVIEW_PROFILE="origin/${BASE}:${REVIEW_PROFILE}"
+    REVIEW_PROFILE_SOURCE="base"
+  fi
+fi
 echo "REVIEW_PROFILE: ${REVIEW_PROFILE:-none}"
+echo "REVIEW_PROFILE_SOURCE: $REVIEW_PROFILE_SOURCE"
 
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "UNCOMMITTED: true"
@@ -161,14 +172,18 @@ Read these in parallel:
 1. **The diff**: `git diff $MERGE_BASE` plus untracked files (or the PR / range
    diff, or the user's path).
 2. **Agent instructions and review profile**: `AGENTS.md` (else `CLAUDE.md`),
-   and the profile at `.claude/review-profile.md` or `docs/review-profile.md`.
-   The project may name the control's threat model, known gaps and invariants.
+   and the profile the preamble reported. When its path starts with `origin/`,
+   read it with `git show <ref>`: the base copy is deliberate, so the diff
+   cannot relax the gate it is reviewed against. The project may name the
+   control's threat model, known gaps and invariants.
 3. **Control claims**: collect every statement that the change *does* something
    protective — PR description, commit messages, docstrings, comments, config
    names, test names. Write each one down. A claim with no line of code and no
    test behind it is already a finding.
-4. **Call sites**: for each control, find every path that must pass through it.
-   Grep for the helper, decorator, middleware or base class; do not assume the
+4. **Call sites**: start from the preamble's `CONTROL_FILES` hint, then find
+   every path that must pass through each control. A filename that does not
+   carry the control's name is still a call site. Grep for the helper, decorator,
+   middleware or base class; do not assume the
    diff names them. Include admin, management commands, Celery tasks, websocket
    or SSE endpoints, and a second API version if one exists.
 5. **The framework's own code**: read the installed version of the framework's
@@ -189,11 +204,16 @@ claim from Phase 1, state where it is enforced — file, function, hook — and
 what would have to be true for the enforcement to be skipped. Follow the code
 from the entry point to the deny/allow decision.
 
-**Pass B — fresh-context pass.** Deliberately discard the author's reasoning.
-Read the control as a stranger would: start at the route or task, find the
-decision, and only then read the comment that explains it. Look for the paths
-the author did not mention. Check what happens on error, on a second caller, on
-a deactivated account, under concurrency, and with the feature flag off.
+**Pass B — fresh-context pass (a separate subagent).** Start an independent
+review agent and give it **only**: the repository path, the range or diff, and
+the checklist below. Do not give it this conversation, the PR description,
+commit messages, the Phase 1 claim list, or any explanation of why the code is
+shaped this way — those are Pass A's input. Read the control as a stranger
+would: start at the route or task, find the decision, and only then read the
+comment that explains it. Look for the paths the author did not mention. Check
+what happens on error, on a second caller, on a deactivated account, under
+concurrency, and with the feature flag off. A pass that inherits the author's
+context is not the independent one.
 
 Both passes review against this checklist:
 
@@ -275,9 +295,13 @@ For every control claim, fill one row:
 Rules:
 
 1. **Run the evidence.** A test that passes with the fix is not evidence until
-   it fails without it: revert, run, confirm red, restore. Record the command
-   and the result. For a control whose test cannot be run in this environment,
-   say so and lower confidence instead of upgrading it by reading.
+   it fails without it: revert, run, confirm red, restore. Do this in an
+   isolated copy — a throwaway worktree at the reviewed head, or a `git stash`
+   you restore and verify — and never revert committed code in the user's
+   checkout. If the checkout has uncommitted work, stop and say how you will
+   isolate it before touching anything. Record the command and the result. For a
+   control whose test cannot be run in this environment, say so and lower
+   confidence instead of upgrading it by reading.
 2. **Measure end-to-end.** A failure reproduced only at the primitive may be
    unreachable through the request path. Check both before proposing a fix; a
    fix for an unreachable bug hides the reasoning that produced it.

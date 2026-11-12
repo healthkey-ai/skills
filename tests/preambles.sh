@@ -113,10 +113,37 @@ dirty_check() { # <skill> <regex>...
   out=$(cd "$WORK/dirty/app" && GH_PR_BASE="" bash "$WORK/$s.sh" 2>&1)
   for re in "$@"; do expect "$s [dirty]" "$out" "$re"; done
 }
-dirty_check hk-code-review     '^NO_DIFF: false$' '^UNCOMMITTED: true$' '^app/migrations/0002_x\.py$' '^infra/prod\.tfvars$' '^FILES_CHANGED: 4$'
-dirty_check hk-backend-review  '^FILES_CHANGED: 2$' '^HAS_MIGRATIONS: true$' '^app/migrations/0002_x\.py$'
-dirty_check hk-frontend-review '^FILES_CHANGED: 1$'
-dirty_check hk-infra-review    '^TF_DIFF: found$' '^infra/prod\.tfvars$'
+dirty_check hk-code-review     '^NO_DIFF: false$' '^UNCOMMITTED: true$' '^app/migrations/0002_x\.py$' '^infra/prod\.tfvars$' '^FILES_CHANGED: 4$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+dirty_check hk-backend-review  '^FILES_CHANGED: 2$' '^HAS_MIGRATIONS: true$' '^app/migrations/0002_x\.py$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+dirty_check hk-frontend-review '^FILES_CHANGED: 1$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+dirty_check hk-infra-review    '^TF_DIFF: found$' '^infra/prod\.tfvars$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+dirty_check hk-security-review '^FILES_CHANGED: 4$' '^CONTROL_FILES: none$' '^REVIEW_PROFILE: none$' '^REVIEW_PROFILE_SOURCE: none$'
+
+# The profile is resolved from the working tree, but a copy that exists on the
+# base wins. Both matter: the first finds a project that just adopted one; the
+# second stops a diff from relaxing the gate it is being reviewed against.
+profile_check() { # <repo> <label> <regex>...
+  local repo=$1 label=$2 s out; shift 2
+  for script in "$WORK"/*.sh; do
+    s=$(basename "$script" .sh)
+    out=$(cd "$WORK/$repo" && GH_PR_BASE="" bash "$script" 2>&1)
+    for re in "$@"; do expect "$s [$label]" "$out" "$re"; done
+  done
+}
+
+mkdir -p "$WORK/dirty/docs" && echo p > "$WORK/dirty/docs/review-profile.md"
+profile_check dirty "profile-worktree" '^REVIEW_PROFILE: docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: working tree$'
+mkdir -p "$WORK/dirty/.claude" && echo p > "$WORK/dirty/.claude/review-profile.md"
+profile_check dirty "profile-precedence" '^REVIEW_PROFILE: \.claude/review-profile\.md$'
+
+# A profile committed on the base stays authoritative while a branch edits it.
+git clone -q "$WORK/o.git" "$WORK/profile" 2>/dev/null
+( cd "$WORK/profile" && git checkout -q -B dev origin/dev &&
+  mkdir -p docs && echo p > docs/review-profile.md &&
+  git add docs/review-profile.md && git commit -q -m profile && git push -q origin dev &&
+  git checkout -q -B feat-profile origin/dev &&
+  echo changed >> docs/review-profile.md && git add docs/review-profile.md && git commit -q -m edit )
+profile_check profile "profile-base" '^BASE: dev$' '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
 
 echo "$checks checks, $fails failed"
 [ "$fails" -eq 0 ]

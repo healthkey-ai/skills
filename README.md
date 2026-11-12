@@ -15,11 +15,16 @@ Shared Claude Code review skills for Django/DRF/Celery + React/Tailwind/shadcn p
 ## Project Review Profile
 
 A project can ship its own addendum at `.claude/review-profile.md` or
-`docs/review-profile.md` (the `.claude/` copy wins when both exist). Every skill
-reads it in Phase 1 and treats it as authoritative for that project: domain
-checklists, commands, gates, known failure modes, and repository-specific gates
-override the generic conventions where the two disagree. Without one, the
+`docs/review-profile.md` (the `.claude/` copy wins when both exist). From v1.3
+every skill reads it in Phase 1 and treats it as authoritative for that project:
+domain checklists, commands, gates, known failure modes, and repository-specific
+gates override the generic conventions where the two disagree. Without one, the
 generic conventions apply unchanged.
+
+When the base branch already has the profile, the skills read the **base copy**
+(printed as `origin/<base>:<path>`) instead of the working-tree copy. A pull
+request that edits the profile is therefore reviewed against the gate it is
+changing, not against the version it is proposing.
 
 This keeps the shared engine project-agnostic: stack and domain specifics stay
 in the repository they describe and are reviewed like any other code.

@@ -55,11 +55,22 @@ else
   echo "MERGE_BASE: $MERGE_BASE"
 fi
 # Project review profile: the project's own checklists, read in Phase 1.
+# Resolve the path from the working tree, but read the base copy when the base
+# has one: a diff must not be able to relax the gate it is reviewed against.
 REVIEW_PROFILE=""
 for p in .claude/review-profile.md docs/review-profile.md; do
   if [ -f "$p" ]; then REVIEW_PROFILE="$p"; break; fi
 done
+REVIEW_PROFILE_SOURCE="none"
+if [ -n "$REVIEW_PROFILE" ]; then
+  REVIEW_PROFILE_SOURCE="working tree"
+  if [ -n "$BASE" ] && git cat-file -e "origin/${BASE}:${REVIEW_PROFILE}" 2>/dev/null; then
+    REVIEW_PROFILE="origin/${BASE}:${REVIEW_PROFILE}"
+    REVIEW_PROFILE_SOURCE="base"
+  fi
+fi
 echo "REVIEW_PROFILE: ${REVIEW_PROFILE:-none}"
+echo "REVIEW_PROFILE_SOURCE: $REVIEW_PROFILE_SOURCE"
 
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "UNCOMMITTED: true"
@@ -115,7 +126,7 @@ Read these in parallel:
 
 1. **The diff**: `git diff $MERGE_BASE -- '*.tsx' '*.ts' '*.css'` plus the files listed under UNTRACKED (or the PR / range diff, or scoped to the user's path)
 2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for conventions and architecture
-3. **Review profile**: Read `.claude/review-profile.md` or `docs/review-profile.md` if the preamble found one. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins
+3. **Review profile**: Read the profile the preamble reported. When the path starts with `origin/`, read it with `git show <ref>`: the base copy is deliberate, so a diff cannot relax the gate it is reviewed against. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins. With no profile, the defaults below apply
 4. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
 5. **Package versions**: Read `package.json` for React, React Query, Tailwind, and shadcn versions
 
