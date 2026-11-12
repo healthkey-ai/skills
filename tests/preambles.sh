@@ -45,6 +45,12 @@ git -C "$WORK/o.git" symbolic-ref HEAD refs/heads/dev
 git -C "$WORK/clone" fetch -q
 # single: a single-branch clone that has never seen any base but main.
 git clone -q --single-branch -b main "$WORK/o.git" "$WORK/single" 2>/dev/null
+# dirty: a feature branch with committed, modified and untracked files.
+git clone -q "$WORK/o.git" "$WORK/dirty" 2>/dev/null
+( cd "$WORK/dirty" && git checkout -q -b feat origin/dev && mkdir -p app infra &&
+  echo a > app/models.py && echo b > app/ui.tsx && git add app && git commit -q -m feat &&
+  echo changed >> app/models.py &&
+  mkdir -p app/migrations && echo m > app/migrations/0002_x.py && echo 'x = 1' > infra/prod.tfvars )
 # noremote: no origin at all.
 git init -q -b main "$WORK/noremote" && git -C "$WORK/noremote" commit -q --allow-empty -m x
 
@@ -60,21 +66,33 @@ expect() { # <label> <output> <regex>
 # Every shell x skill run gets its own copy, so one run's fetch cannot help the next.
 run_case() {
   local repo=$1 branch=$2 from=$3 pr=$4 want=$5 mb=$6
-  local sh script s out label dir
-  for sh in bash zsh; do
-    for script in "$WORK"/*.sh; do
-      s=$(basename "$script" .sh)
+  local script s out label dir want_mb out_bash
+  for script in "$WORK"/*.sh; do
+    s=$(basename "$script" .sh)
+    out_bash=""
+    for sh in bash zsh; do
       dir="$WORK/case-$RANDOM$RANDOM"
       cp -R "$WORK/$repo" "$dir"
       git -C "$dir" checkout -q -B "$branch" "$from"
       mkdir -p "$dir/sub"
-      out=$(cd "$dir/sub" && GH_PR_BASE="$pr" "$sh" "$script" 2>&1)
+      out=$(cd "$dir/sub" && GH_PR_BASE="$pr" "$sh" "$script" 2>&1 | grep -v '^START_DIR: ')
       label="$s [$sh] repo=$repo branch=$branch pr=${pr:-none}"
       expect "$label" "$out" "^BASE: ${want//./\\.}\$"
       if [ "$mb" = yes ]; then
-        expect "$label" "$out" "^MERGE_BASE: [0-9a-f]{40}\$"
+        want_mb=$(git -C "$dir" merge-base "origin/$want" HEAD)
+        expect "$label" "$out" "^MERGE_BASE: $want_mb\$"
       else
         expect "$label" "$out" "^NO_BASE: true\$"
+      fi
+      if [ "$sh" = bash ]; then
+        out_bash=$out
+      else
+        checks=$((checks + 1))
+        if [ "$out" != "$out_bash" ]; then
+          echo "FAIL  $s repo=$repo branch=$branch: bash and zsh output differ"
+          diff <(printf '%s\n' "$out_bash") <(printf '%s\n' "$out") | sed 's/^/      | /'
+          fails=$((fails + 1))
+        fi
       fi
       rm -rf "$dir"
     done
@@ -87,6 +105,18 @@ run_case single   feat main       2omop       2omop        yes  # base never fet
 run_case single   feat main       release/1.2 release/1.2  yes
 run_case clone    dev  origin/dev main        dev          yes  # on the default branch: PR ignored
 run_case noremote feat main       ""          unknown      no
+
+# The dirty tree, run from a subdirectory: paths are root-relative and
+# uncommitted / untracked work is counted.
+dirty_check() { # <skill> <regex>...
+  local s=$1 out; shift
+  out=$(cd "$WORK/dirty/app" && GH_PR_BASE="" bash "$WORK/$s.sh" 2>&1)
+  for re in "$@"; do expect "$s [dirty]" "$out" "$re"; done
+}
+dirty_check hk-code-review     '^NO_DIFF: false$' '^UNCOMMITTED: true$' '^app/migrations/0002_x\.py$' '^infra/prod\.tfvars$' '^FILES_CHANGED: 4$'
+dirty_check hk-backend-review  '^FILES_CHANGED: 2$' '^HAS_MIGRATIONS: true$' '^app/migrations/0002_x\.py$'
+dirty_check hk-frontend-review '^FILES_CHANGED: 1$'
+dirty_check hk-infra-review    '^TF_DIFF: found$' '^infra/prod\.tfvars$'
 
 echo "$checks checks, $fails failed"
 [ "$fails" -eq 0 ]

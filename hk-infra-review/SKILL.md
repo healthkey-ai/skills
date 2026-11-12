@@ -15,9 +15,8 @@ metadata:
 START_DIR=$(pwd)
 echo "START_DIR: $START_DIR"
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-# Network calls below must fail fast rather than wait for a password prompt.
+# Network calls below must fail fast rather than wait for an HTTPS credential prompt.
 export GIT_TERMINAL_PROMPT=0
-export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 
 BRANCH=$(git branch --show-current 2>/dev/null)
 echo "BRANCH: ${BRANCH:-detached}"
