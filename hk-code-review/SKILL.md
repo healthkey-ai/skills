@@ -1,8 +1,8 @@
 ---
 name: hk-code-review
-description: "[v1.1.0] Review branch diff against base. Finds bugs, security, and design issues. Auto-fixes mechanical problems, asks before design changes."
+description: "[v1.2.0] Review branch diff against base. Finds bugs, security, and design issues. Offers mechanical fixes (applied on approval or with --fix), asks before design changes."
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   source: "shared"
 ---
 
@@ -11,40 +11,88 @@ metadata:
 ## Preamble
 
 ```bash
-BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-echo "BRANCH: $BRANCH"
+# Paths below are relative to the repo root, wherever the review was started.
+START_DIR=$(pwd)
+echo "START_DIR: $START_DIR"
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Network calls below must fail fast rather than wait for an HTTPS credential prompt.
+export GIT_TERMINAL_PROMPT=0
 
-# Detect base branch
-BASE="main"
-if git rev-parse --verify origin/main >/dev/null 2>&1; then
-  BASE="main"
-elif git rev-parse --verify origin/master >/dev/null 2>&1; then
-  BASE="master"
+BRANCH=$(git branch --show-current 2>/dev/null)
+echo "BRANCH: ${BRANCH:-detached}"
+
+# Default branch from origin itself: a clone's cached origin/HEAD is not
+# updated by fetch and goes stale when the default branch is changed. (Not
+# `gh repo view`: it may resolve to another remote than origin.)
+DEFAULT=$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p')
+if [ -z "$DEFAULT" ]; then
+  DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
 fi
-echo "BASE: $BASE"
+if [ -z "$DEFAULT" ]; then
+  for b in main master; do
+    if git rev-parse --verify -q "origin/$b" >/dev/null; then DEFAULT="$b"; break; fi
+  done
+fi
 
-# Check we have something to review
-DIFF_STAT=$(git diff "$BASE"..."$BRANCH" --stat 2>/dev/null || git diff "$BASE"..HEAD --stat 2>/dev/null || echo "")
-if [ -z "$DIFF_STAT" ]; then
+# Base: the open PR's base if this feature branch has one, else the default branch.
+BASE=""
+if [ -n "$BRANCH" ] && [ "$BRANCH" != "$DEFAULT" ]; then
+  BASE=$(gh pr view --json baseRefName,state -q 'select(.state == "OPEN") | .baseRefName' 2>/dev/null || true)
+fi
+BASE=${BASE:-$DEFAULT}
+echo "BASE: ${BASE:-unknown}"
+
+# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
+# The explicit refspec also works in single-branch clones.
+if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
+  # Braces matter: zsh would read "$BASE:r" as the :r (strip extension) modifier.
+  git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null || true
+fi
+MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
+if [ -z "$MERGE_BASE" ]; then
+  echo "NO_BASE: true"
+else
+  echo "MERGE_BASE: $MERGE_BASE"
+fi
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "UNCOMMITTED: true"
+else
+  echo "UNCOMMITTED: false"
+fi
+
+DIFF_STAT=""
+UNTRACKED=""
+if [ -n "$MERGE_BASE" ]; then
+  DIFF_STAT=$(git diff "$MERGE_BASE" --stat)
+  UNTRACKED=$(git ls-files --others --exclude-standard)
+fi
+if [ -z "$MERGE_BASE" ]; then
+  :
+elif [ -z "$DIFF_STAT" ] && [ -z "$UNTRACKED" ]; then
   echo "NO_DIFF: true"
 else
   echo "NO_DIFF: false"
-  echo "$DIFF_STAT"
+  [ -n "$DIFF_STAT" ] && echo "$DIFF_STAT"
+  [ -n "$UNTRACKED" ] && printf 'UNTRACKED:\n%s\n' "$UNTRACKED"
 fi
 
-# Count files changed
-FILES_CHANGED=$(git diff "$BASE"..."$BRANCH" --name-only 2>/dev/null | wc -l | tr -d ' ')
+FILES_CHANGED=$( { [ -n "$MERGE_BASE" ] && git diff "$MERGE_BASE" --name-only; printf '%s\n' "$UNTRACKED"; } | grep -c . )
 echo "FILES_CHANGED: $FILES_CHANGED"
 ```
 
-If `NO_DIFF` is `true`, tell the user there are no changes to review and stop.
+When no PR number or range was given: if `NO_DIFF` is `true`, tell the user there are no changes to review and stop.
+When no PR number or range was given: if `NO_BASE` is `true`, the base branch could not be resolved locally: tell the user, and ask for an explicit range (e.g. `dev..HEAD`) or a PR number instead of guessing.
 
 ## Input
 
+With a PR number or a range, ignore `NO_DIFF` / `NO_BASE` from the preamble:
+they describe the working tree, not the requested scope.
+
 The user may specify:
-- A PR number (e.g., `/review #42`) — fetch with `gh pr diff 42`
-- A branch comparison (e.g., `/review dev..main`) — use that range
-- Nothing — review current branch against BASE detected in preamble
+- A PR number (e.g., `/hk-code-review #42`) — fetch with `gh pr diff 42`
+- A range (e.g., `/hk-code-review dev..HEAD`) — review `git diff dev...HEAD` (committed changes only)
+- Nothing — review the working tree (committed + uncommitted + untracked) against MERGE_BASE from the preamble
+- `--fix` — apply mechanical fixes without asking (see Fix Mode)
 
 If the user mentions "today's PRs" or similar, list recent merged PRs with
 `gh pr list --state merged --limit 10` and review those diffs.
@@ -57,9 +105,9 @@ Three phases. Phase 1 and the two Phase 2 agents run in parallel where possible.
 
 Read these in parallel (use Agent tool for the diff if it's large):
 
-1. **The diff**: `git diff $BASE...$BRANCH` (or PR diff)
+1. **The diff**: `git diff $MERGE_BASE` plus the files listed under UNTRACKED (or the PR / range diff)
 2. **CLAUDE.md**: Read the project's CLAUDE.md for conventions and architecture
-3. **Recent commits**: `git log $BASE..$BRANCH --oneline` for commit intent
+3. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
 
 ### Phase 2: Two-Pass Review (parallel subagents)
 
@@ -177,11 +225,25 @@ Same output format as Agent A.
 
 Then apply the **Fix-First** workflow:
 
+#### Fix Mode
+
+By default this review **does not edit files**. Findings in the auto-fix class
+below are presented as "Ready to fix" and applied only after the user approves
+them: whenever there is a ready-to-fix or ask finding, use AskUserQuestion to
+batch-approve them.
+
+Only when the user passed `--fix` are auto-fix findings applied immediately, as
+"Auto-fixed". Even then, if the preamble printed `UNCOMMITTED: true` or a
+non-empty `UNTRACKED` list, say so before editing: the fixes will be mixed into
+the user's uncommitted work. With a PR number or a range, apply fixes only if
+the checked-out branch is that PR's head (or the range's head); otherwise
+report them without editing.
+
 #### Fix-First Rules
 
 For each finding, decide: **auto-fix**, **ask**, or **flag**.
 
-**Auto-fix** (do it, show what you did):
+**Auto-fix** (mechanical; applied after approval, or immediately with `--fix`):
 - Missing error handling / silent exception swallowing
 - Missing timeout on network calls
 - Secrets or credentials accidentally committed
@@ -225,11 +287,11 @@ If user asks for "thorough" review, lower to >= 4.
 Present findings grouped by action:
 
 ```
-## Auto-fixed (N items)
+## Ready to fix (N items)  <!-- "Auto-fixed" with --fix -->
 
 ### 1. <title> [severity] [confidence: N/10]
 <file:line> — <one-line description>
-<what was changed and why>
+<proposed change and why (with --fix: what was changed)>
 
 ## Needs your call (N items)
 
@@ -245,7 +307,7 @@ Present findings grouped by action:
 <observation and recommendation>
 ```
 
-If there are items in "Needs your call", use AskUserQuestion to let the user
+If there are items in "Ready to fix" or "Needs your call", use AskUserQuestion to let the user
 batch-approve fixes. Group related fixes into single questions where it makes sense.
 
 After user approves fixes, apply them all, then show a summary of what changed.

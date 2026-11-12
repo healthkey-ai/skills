@@ -1,8 +1,8 @@
 ---
 name: hk-infra-review
-description: "[v1.1.0] Review GCP infrastructure and Terraform code for security, cost, reliability, and CI/CD best practices."
+description: "[v1.2.0] Review GCP infrastructure and Terraform code for security, cost, reliability, and CI/CD best practices."
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   source: "shared"
 ---
 
@@ -11,20 +11,62 @@ metadata:
 ## Preamble
 
 ```bash
-BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-echo "BRANCH: $BRANCH"
+# Paths below are relative to the repo root, wherever the review was started.
+START_DIR=$(pwd)
+echo "START_DIR: $START_DIR"
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Network calls below must fail fast rather than wait for an HTTPS credential prompt.
+export GIT_TERMINAL_PROMPT=0
 
-BASE="dev"
-if git rev-parse --verify origin/dev >/dev/null 2>&1; then
-  BASE="dev"
-elif git rev-parse --verify origin/main >/dev/null 2>&1; then
-  BASE="main"
+BRANCH=$(git branch --show-current 2>/dev/null)
+echo "BRANCH: ${BRANCH:-detached}"
+
+# Default branch from origin itself: a clone's cached origin/HEAD is not
+# updated by fetch and goes stale when the default branch is changed. (Not
+# `gh repo view`: it may resolve to another remote than origin.)
+DEFAULT=$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p')
+if [ -z "$DEFAULT" ]; then
+  DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
 fi
-echo "BASE: $BASE"
+if [ -z "$DEFAULT" ]; then
+  for b in main master; do
+    if git rev-parse --verify -q "origin/$b" >/dev/null; then DEFAULT="$b"; break; fi
+  done
+fi
+
+# Base: the open PR's base if this feature branch has one, else the default branch.
+BASE=""
+if [ -n "$BRANCH" ] && [ "$BRANCH" != "$DEFAULT" ]; then
+  BASE=$(gh pr view --json baseRefName,state -q 'select(.state == "OPEN") | .baseRefName' 2>/dev/null || true)
+fi
+BASE=${BASE:-$DEFAULT}
+echo "BASE: ${BASE:-unknown}"
+
+# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
+# The explicit refspec also works in single-branch clones.
+if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
+  # Braces matter: zsh would read "$BASE:r" as the :r (strip extension) modifier.
+  git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null || true
+fi
+MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
+if [ -z "$MERGE_BASE" ]; then
+  echo "NO_BASE: true"
+else
+  echo "MERGE_BASE: $MERGE_BASE"
+fi
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "UNCOMMITTED: true"
+else
+  echo "UNCOMMITTED: false"
+fi
 
 # Check for .tf changes
-TF_DIFF=$(git diff "$BASE"..."$BRANCH" --name-only -- '*.tf' '*.tfvars' 2>/dev/null || echo "")
-TF_DIFF_STAT=$(git diff "$BASE"..."$BRANCH" --stat -- '*.tf' '*.tfvars' 2>/dev/null || echo "")
+TF_DIFF=""
+TF_DIFF_STAT=""
+if [ -n "$MERGE_BASE" ]; then
+  TF_DIFF=$( { git diff "$MERGE_BASE" --name-only -- '*.tf' '*.tfvars'; git ls-files --others --exclude-standard -- '*.tf' '*.tfvars'; } | grep . )
+  TF_DIFF_STAT=$(git diff "$MERGE_BASE" --stat -- '*.tf' '*.tfvars')
+fi
 
 if [ -z "$TF_DIFF" ]; then
   echo "TF_DIFF: none"
@@ -35,8 +77,14 @@ else
   echo "$TF_DIFF_STAT"
 fi
 
+UNTRACKED=$(git ls-files --others --exclude-standard -- '*.tf' '*.tfvars' '.github/workflows/*terraform*' '.github/workflows/*deploy*')
+[ -n "$UNTRACKED" ] && printf 'UNTRACKED:\n%s\n' "$UNTRACKED"
+
 # Also check for workflow changes that touch infra
-CI_DIFF=$(git diff "$BASE"..."$BRANCH" --name-only -- '.github/workflows/*terraform*' '.github/workflows/*deploy*' 2>/dev/null || echo "")
+CI_DIFF=""
+if [ -n "$MERGE_BASE" ]; then
+  CI_DIFF=$( { git diff "$MERGE_BASE" --name-only -- '.github/workflows/*terraform*' '.github/workflows/*deploy*'; git ls-files --others --exclude-standard -- '.github/workflows/*terraform*' '.github/workflows/*deploy*'; } | grep . )
+fi
 if [ -n "$CI_DIFF" ]; then
   echo "CI_DIFF: found"
   echo "$CI_DIFF"
@@ -58,13 +106,22 @@ echo "TF_VERSION: $TF_VERSION"
 ## Input
 
 The user may specify:
-- Nothing — review `.tf` / `.tfvars` changes on the current branch against BASE
+- Nothing — review `.tf` / `.tfvars` changes in the working tree (committed + uncommitted + untracked) against MERGE_BASE
+- A range (e.g., `/hk-infra-review dev..HEAD`) — review `git diff dev...HEAD -- '*.tf' '*.tfvars'` (committed changes only)
 - `full` or `audit` — review the entire `infra/` tree regardless of branch diff
 - A file path — review that specific file
-- A PR number (e.g., `/infra-review #42`) — fetch the PR diff and review only infra files
+- A PR number (e.g., `/hk-infra-review #42`) — fetch with `gh pr diff 42` and review only the infra files in it
+- `--fix` — apply mechanical fixes without asking (see Fix Mode)
 
-If `TF_DIFF` is `none` and the user did not request a full audit, ask whether they want a
+With a PR number, a range, a file path or `full`/`audit`, ignore `TF_DIFF` / `NO_BASE` from the
+preamble: they describe the working tree, not the requested scope.
+Resolve a relative path argument against `START_DIR` from the preamble, not the
+repo root the preamble switched to.
+
+When no scope was given: if `TF_DIFF` is `none`, ask whether they want a
 full audit of all infrastructure files instead.
+
+When no scope was given: if `NO_BASE` is `true`, the base branch could not be resolved locally: tell the user, and ask for an explicit range (e.g. `dev..HEAD`) or a PR number or a full audit, instead of guessing.
 
 ## How This Review Works
 
@@ -74,7 +131,7 @@ Three phases. Phase 2 agents run in parallel.
 
 Read these in parallel:
 
-1. **The diff or full tree**: If reviewing a diff, `git diff $BASE...$BRANCH -- '*.tf' '*.tfvars'`.
+1. **The diff or full tree**: If reviewing a diff, `git diff $MERGE_BASE -- '*.tf' '*.tfvars'` plus the untracked `.tf` / `.tfvars` files listed in `TF_DIFF` (and untracked workflows in `CI_DIFF`).
    If full audit, read all files under `infra/`.
 2. **CLAUDE.md**: Read the project's CLAUDE.md for architecture context (especially the
    "Architecture" and "Infrastructure Targets" sections).
@@ -240,11 +297,25 @@ FIX: <exact code change if fixable, or recommendation if not>
 
 Then apply the **Fix-First** workflow:
 
+#### Fix Mode
+
+By default this review **does not edit files**. Findings in the auto-fix class
+below are presented as "Ready to fix" and applied only after the user approves
+them: whenever there is a ready-to-fix or ask finding, use AskUserQuestion to
+batch-approve them.
+
+Only when the user passed `--fix` are auto-fix findings applied immediately, as
+"Auto-fixed". Even then, if the preamble printed `UNCOMMITTED: true` or a
+non-empty `UNTRACKED` list, say so before editing: the fixes will be mixed into
+the user's uncommitted work. With a PR number or a range, apply fixes only if
+the checked-out branch is that PR's head (or the range's head); otherwise
+report them without editing.
+
 #### Fix-First Rules
 
 For each finding, decide: **auto-fix**, **ask**, or **flag**.
 
-**Auto-fix** (do it, show what you did):
+**Auto-fix** (mechanical; applied after approval, or immediately with `--fix`):
 - Missing `description` on variables
 - Missing `sensitive = true` on password/key/token variables
 - Missing type constraints on variables
@@ -295,11 +366,11 @@ Present findings grouped by action:
 **Services**: <list of GCP services touched>
 **Risk level**: <overall assessment: clean / low risk / medium risk / high risk>
 
-## Auto-fixed (N items)
+## Ready to fix (N items)  <!-- "Auto-fixed" with --fix -->
 
 ### 1. <title> [severity] [category] [confidence: N/10]
 <file:line> — <one-line description>
-<what was changed and why>
+<proposed change and why (with --fix: what was changed)>
 
 ## Needs your call (N items)
 
@@ -322,7 +393,7 @@ Quick checklist of what needs to change before promoting staging → production:
 - ...
 ```
 
-If there are items in "Needs your call", use AskUserQuestion to let the user
+If there are items in "Ready to fix" or "Needs your call", use AskUserQuestion to let the user
 batch-approve fixes. Group related fixes into single questions.
 
 After user approves fixes, apply them all, then show a summary of what changed.

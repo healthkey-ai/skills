@@ -6,10 +6,10 @@ Shared Claude Code review skills for Django/DRF/Celery + React/Tailwind/shadcn p
 
 | Skill | Version | Source | Description |
 |-------|---------|--------|-------------|
-| `hk-code-review` | 1.1.0 | shared | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Auto-fixes mechanical issues, asks before design changes. |
-| `hk-backend-review` | 1.1.0 | shared | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
-| `hk-frontend-review` | 1.1.0 | shared | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
-| `hk-infra-review` | 1.1.0 | shared | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
+| `hk-code-review` | 1.2.0 | shared | Full-stack code review against the base branch. Finds bugs, security issues, design problems. Offers mechanical fixes (applied on approval, or immediately with `--fix`), asks before design changes. |
+| `hk-backend-review` | 1.2.0 | shared | Deep Python / Django / DRF / Celery review. Catches N+1 queries, missing indexes, unsafe migrations, task timeout violations, serializer contract drift. |
+| `hk-frontend-review` | 1.2.0 | shared | React / Tailwind / shadcn/ui / React Query review. Catches anti-patterns, stale closures, cache misses, accessibility gaps. |
+| `hk-infra-review` | 1.2.0 | shared | GCP infrastructure and Terraform review for security, IAM, cost, reliability, and CI/CD best practices. |
 
 ## Install
 
@@ -57,6 +57,17 @@ Exit code: `0` = all current, `1` = updates available.
 
 ## Development
 
+### Preamble Tests
+
+The bash preamble of each skill is run by the agent's shell, which may be bash or zsh.
+`tests/preambles.sh` runs every preamble under both against throwaway git repos
+(stale `origin/HEAD`, single-branch clone, PR bases like `release/1.2`, no remote)
+and checks the base branch it resolves. Run it after changing a preamble:
+
+```bash
+tests/preambles.sh
+```
+
 ### Pre-Commit Hook
 
 A pre-commit hook validates skills consistency before committing to this repo:
@@ -86,10 +97,15 @@ After installing, invoke a skill in Claude Code with its slash command:
 Each skill accepts optional arguments:
 
 ```
+/hk-code-review                  # working tree vs. the base (open PR's base, else origin's default branch)
 /hk-code-review #42              # review a specific PR
+/hk-code-review dev..HEAD        # review an explicit range (committed changes only)
 /hk-backend-review apps/<app>/   # scope to a directory
 /hk-infra-review full            # audit entire infra/ tree
+/hk-frontend-review --fix        # apply mechanical fixes without asking
 ```
+
+Reviews never edit files unless you approve the proposed fixes or pass `--fix`.
 
 ## Metadata
 

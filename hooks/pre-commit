@@ -12,7 +12,7 @@ errors=0
 # Every skill directory must have a SKILL.md
 for dir in "$REPO_ROOT"/*/; do
   name=$(basename "$dir")
-  [ "$name" = "hooks" ] && continue
+  case "$name" in hooks|tests) continue ;; esac
   if [ ! -f "$dir/SKILL.md" ]; then
     echo "error: $name/ exists but has no SKILL.md"
     errors=$((errors + 1))
