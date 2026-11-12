@@ -11,24 +11,40 @@ metadata:
 ## Preamble
 
 ```bash
+# Paths below are relative to the repo root, wherever the review was started.
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+export GIT_TERMINAL_PROMPT=0
+
 BRANCH=$(git branch --show-current 2>/dev/null)
 echo "BRANCH: ${BRANCH:-detached}"
 
-# Base: the open PR's base if this branch has one, else the remote default branch.
-BASE=$(gh pr view --json baseRefName,state -q 'select(.state == "OPEN") | .baseRefName' 2>/dev/null || true)
-if [ -z "$BASE" ]; then
-  BASE=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+# Default branch from the remote itself: a clone's cached origin/HEAD is not
+# updated by fetch and goes stale when the default branch is changed.
+DEFAULT=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || true)
+if [ -z "$DEFAULT" ]; then
+  DEFAULT=$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p')
 fi
-if [ -z "$BASE" ]; then
+if [ -z "$DEFAULT" ]; then
+  DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+fi
+if [ -z "$DEFAULT" ]; then
   for b in main master; do
-    if git rev-parse --verify -q "origin/$b" >/dev/null; then BASE="$b"; break; fi
+    if git rev-parse --verify -q "origin/$b" >/dev/null; then DEFAULT="$b"; break; fi
   done
 fi
+
+# Base: the open PR's base if this feature branch has one, else the default branch.
+BASE=""
+if [ -n "$BRANCH" ] && [ "$BRANCH" != "$DEFAULT" ]; then
+  BASE=$(gh pr view --json baseRefName,state -q 'select(.state == "OPEN") | .baseRefName' 2>/dev/null || true)
+fi
+BASE=${BASE:-$DEFAULT}
 echo "BASE: ${BASE:-unknown}"
 
 # Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
+# The explicit refspec also works in single-branch clones.
 if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
-  git fetch -q origin "$BASE" 2>/dev/null || true
+  git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2>/dev/null || true
 fi
 MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
 if [ -z "$MERGE_BASE" ]; then
@@ -62,7 +78,7 @@ fi
 # Also check for workflow changes that touch infra
 CI_DIFF=""
 if [ -n "$MERGE_BASE" ]; then
-  CI_DIFF=$(git diff "$MERGE_BASE" --name-only -- '.github/workflows/*terraform*' '.github/workflows/*deploy*')
+  CI_DIFF=$( { git diff "$MERGE_BASE" --name-only -- '.github/workflows/*terraform*' '.github/workflows/*deploy*'; git ls-files --others --exclude-standard -- '.github/workflows/*terraform*' '.github/workflows/*deploy*'; } | grep . )
 fi
 if [ -n "$CI_DIFF" ]; then
   echo "CI_DIFF: found"
@@ -92,10 +108,13 @@ The user may specify:
 - A PR number (e.g., `/hk-infra-review #42`) — fetch with `gh pr diff 42` and review only the infra files in it
 - `--fix` — apply mechanical fixes without asking (see Fix Mode)
 
-If `TF_DIFF` is `none` and the user did not request a full audit, ask whether they want a
+With a PR number, a range, a file path or `full`/`audit`, ignore `TF_DIFF` / `NO_BASE` from the
+preamble: they describe the working tree, not the requested scope.
+
+When no scope was given: if `TF_DIFF` is `none`, ask whether they want a
 full audit of all infrastructure files instead.
 
-If `NO_BASE` is `true`, the base branch could not be resolved locally: tell the user, and ask for an explicit range (e.g. `dev..HEAD`) or a PR number or a full audit, instead of guessing.
+When no scope was given: if `NO_BASE` is `true`, the base branch could not be resolved locally: tell the user, and ask for an explicit range (e.g. `dev..HEAD`) or a PR number or a full audit, instead of guessing.
 
 ## How This Review Works
 
@@ -105,7 +124,7 @@ Three phases. Phase 2 agents run in parallel.
 
 Read these in parallel:
 
-1. **The diff or full tree**: If reviewing a diff, `git diff $MERGE_BASE -- '*.tf' '*.tfvars'` plus untracked `.tf` files.
+1. **The diff or full tree**: If reviewing a diff, `git diff $MERGE_BASE -- '*.tf' '*.tfvars'` plus the untracked `.tf` / `.tfvars` files listed in `TF_DIFF` (and untracked workflows in `CI_DIFF`).
    If full audit, read all files under `infra/`.
 2. **CLAUDE.md**: Read the project's CLAUDE.md for architecture context (especially the
    "Architecture" and "Infrastructure Targets" sections).
@@ -275,11 +294,15 @@ Then apply the **Fix-First** workflow:
 
 By default this review **does not edit files**. Findings in the auto-fix class
 below are presented as "Ready to fix" and applied only after the user approves
-them, in the same AskUserQuestion batch as "Needs your call".
+them: whenever there is a ready-to-fix or ask finding, use AskUserQuestion to
+batch-approve them.
 
 Only when the user passed `--fix` are auto-fix findings applied immediately, as
-"Auto-fixed". Even then, if the preamble printed `UNCOMMITTED: true`, say so
-before editing: the fixes will be mixed into the user's uncommitted changes.
+"Auto-fixed". Even then, if the preamble printed `UNCOMMITTED: true` or a
+non-empty `UNTRACKED` list, say so before editing: the fixes will be mixed into
+the user's uncommitted work. With a PR number or a range, apply fixes only if
+the checked-out branch is that PR's head (or the range's head); otherwise
+report them without editing.
 
 #### Fix-First Rules
 
@@ -340,7 +363,7 @@ Present findings grouped by action:
 
 ### 1. <title> [severity] [category] [confidence: N/10]
 <file:line> — <one-line description>
-<what was changed and why>
+<proposed change and why (with --fix: what was changed)>
 
 ## Needs your call (N items)
 
@@ -363,7 +386,7 @@ Quick checklist of what needs to change before promoting staging → production:
 - ...
 ```
 
-If there are items in "Needs your call", use AskUserQuestion to let the user
+If there are items in "Ready to fix" or "Needs your call", use AskUserQuestion to let the user
 batch-approve fixes. Group related fixes into single questions.
 
 After user approves fixes, apply them all, then show a summary of what changed.

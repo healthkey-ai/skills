@@ -11,24 +11,40 @@ metadata:
 ## Preamble
 
 ```bash
+# Paths below are relative to the repo root, wherever the review was started.
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+export GIT_TERMINAL_PROMPT=0
+
 BRANCH=$(git branch --show-current 2>/dev/null)
 echo "BRANCH: ${BRANCH:-detached}"
 
-# Base: the open PR's base if this branch has one, else the remote default branch.
-BASE=$(gh pr view --json baseRefName,state -q 'select(.state == "OPEN") | .baseRefName' 2>/dev/null || true)
-if [ -z "$BASE" ]; then
-  BASE=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+# Default branch from the remote itself: a clone's cached origin/HEAD is not
+# updated by fetch and goes stale when the default branch is changed.
+DEFAULT=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || true)
+if [ -z "$DEFAULT" ]; then
+  DEFAULT=$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p')
 fi
-if [ -z "$BASE" ]; then
+if [ -z "$DEFAULT" ]; then
+  DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+fi
+if [ -z "$DEFAULT" ]; then
   for b in main master; do
-    if git rev-parse --verify -q "origin/$b" >/dev/null; then BASE="$b"; break; fi
+    if git rev-parse --verify -q "origin/$b" >/dev/null; then DEFAULT="$b"; break; fi
   done
 fi
+
+# Base: the open PR's base if this feature branch has one, else the default branch.
+BASE=""
+if [ -n "$BRANCH" ] && [ "$BRANCH" != "$DEFAULT" ]; then
+  BASE=$(gh pr view --json baseRefName,state -q 'select(.state == "OPEN") | .baseRefName' 2>/dev/null || true)
+fi
+BASE=${BASE:-$DEFAULT}
 echo "BASE: ${BASE:-unknown}"
 
 # Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
+# The explicit refspec also works in single-branch clones.
 if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
-  git fetch -q origin "$BASE" 2>/dev/null || true
+  git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2>/dev/null || true
 fi
 MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
 if [ -z "$MERGE_BASE" ]; then
@@ -71,10 +87,13 @@ else
 fi
 ```
 
-If `NO_DIFF` is `true`, tell the user there are no backend changes to review and stop.
-If `NO_BASE` is `true`, the base branch could not be resolved locally: tell the user, and ask for an explicit range (e.g. `dev..HEAD`) or a PR number instead of guessing.
+When no PR number, range or path was given: if `NO_DIFF` is `true`, tell the user there are no backend changes to review and stop.
+When no PR number, range or path was given: if `NO_BASE` is `true`, the base branch could not be resolved locally: tell the user, and ask for an explicit range (e.g. `dev..HEAD`) or a PR number instead of guessing.
 
 ## Input
+
+With a PR number, a range or a path, ignore `NO_DIFF` / `NO_BASE` from the preamble:
+they describe the working tree, not the requested scope.
 
 The user may specify:
 - A PR number (e.g., `/hk-backend-review #42`) — fetch with `gh pr diff 42` and review only the `*.py` / `*.sql` files in it (`gh pr diff` has no path filter)
@@ -93,7 +112,7 @@ Read these in parallel:
 
 1. **The diff**: `git diff $MERGE_BASE -- '*.py' '*.sql'` plus the files listed under UNTRACKED (or the PR / range diff, or scoped to the user's path)
 2. **CLAUDE.md**: Read the project's CLAUDE.md for conventions and architecture
-3. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent
+3. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
 4. **Settings**: Read the Django settings file(s) for database, celery, middleware, and auth configuration
 5. **requirements/pyproject**: Check dependency versions (Django, DRF, Celery, etc.)
 
@@ -315,11 +334,15 @@ Same output format as Agent A.
 
 By default this review **does not edit files**. Findings in the auto-fix class
 below are presented as "Ready to fix" and applied only after the user approves
-them, in the same AskUserQuestion batch as "Needs your call".
+them: whenever there is a ready-to-fix or ask finding, use AskUserQuestion to
+batch-approve them.
 
 Only when the user passed `--fix` are auto-fix findings applied immediately, as
-"Auto-fixed". Even then, if the preamble printed `UNCOMMITTED: true`, say so
-before editing: the fixes will be mixed into the user's uncommitted changes.
+"Auto-fixed". Even then, if the preamble printed `UNCOMMITTED: true` or a
+non-empty `UNTRACKED` list, say so before editing: the fixes will be mixed into
+the user's uncommitted work. With a PR number or a range, apply fixes only if
+the checked-out branch is that PR's head (or the range's head); otherwise
+report them without editing.
 
 #### Fix-First Rules
 
@@ -332,7 +355,6 @@ For each finding, decide: **auto-fix**, **ask**, or **flag**.
 - Missing type hints addable from context
 - print() → logger calls
 - Unused imports
-- Missing read_only_fields on serializer
 - Debug/print statements
 - Missing aria-label equivalents in error response messages
 
@@ -341,6 +363,7 @@ For each finding, decide: **auto-fix**, **ask**, or **flag**.
 - Missing db_index=True / Meta.indexes on columns used in filter/order_by (needs a migration)
 - Changing queryset logic or filters
 - Restructuring serializers (nesting, field changes)
+- Missing read_only_fields on serializer (clients that write the field would silently lose data)
 - Celery task changes (retry logic, timeout, error handling)
 - Permission/auth changes
 - Database schema changes
@@ -400,7 +423,10 @@ Present findings grouped by category:
 ...
 ```
 
-Within each category, list auto-fixed items first, then items needing approval, then flagged items.
+Within each category, list ready-to-fix items first (auto-fixed with `--fix`), then items needing approval, then flagged items.
+
+If there are ready-to-fix or needs-approval items, use AskUserQuestion to let the user
+batch-approve fixes. Group related fixes into single questions.
 
 After user approves fixes, apply them all, then show a summary of what changed.
 
