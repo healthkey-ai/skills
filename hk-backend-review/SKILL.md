@@ -12,18 +12,20 @@ metadata:
 
 ```bash
 # Paths below are relative to the repo root, wherever the review was started.
+START_DIR=$(pwd)
+echo "START_DIR: $START_DIR"
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Network calls below must fail fast rather than wait for a password prompt.
 export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 
 BRANCH=$(git branch --show-current 2>/dev/null)
 echo "BRANCH: ${BRANCH:-detached}"
 
-# Default branch from the remote itself: a clone's cached origin/HEAD is not
-# updated by fetch and goes stale when the default branch is changed.
-DEFAULT=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || true)
-if [ -z "$DEFAULT" ]; then
-  DEFAULT=$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p')
-fi
+# Default branch from origin itself: a clone's cached origin/HEAD is not
+# updated by fetch and goes stale when the default branch is changed. (Not
+# `gh repo view`: it may resolve to another remote than origin.)
+DEFAULT=$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p')
 if [ -z "$DEFAULT" ]; then
   DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
 fi
@@ -44,7 +46,8 @@ echo "BASE: ${BASE:-unknown}"
 # Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
 # The explicit refspec also works in single-branch clones.
 if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
-  git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" 2>/dev/null || true
+  # Braces matter: zsh would read "$BASE:r" as the :r (strip extension) modifier.
+  git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null || true
 fi
 MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
 if [ -z "$MERGE_BASE" ]; then
@@ -87,13 +90,16 @@ else
 fi
 ```
 
-When no PR number, range or path was given: if `NO_DIFF` is `true`, tell the user there are no backend changes to review and stop.
-When no PR number, range or path was given: if `NO_BASE` is `true`, the base branch could not be resolved locally: tell the user, and ask for an explicit range (e.g. `dev..HEAD`) or a PR number instead of guessing.
+When no PR number or range was given: if `NO_DIFF` is `true`, tell the user there are no backend changes to review and stop.
+When no PR number or range was given: if `NO_BASE` is `true`, the base branch could not be resolved locally: tell the user, and ask for an explicit range (e.g. `dev..HEAD`) or a PR number instead of guessing.
 
 ## Input
 
-With a PR number, a range or a path, ignore `NO_DIFF` / `NO_BASE` from the preamble:
-they describe the working tree, not the requested scope.
+With a PR number or a range, ignore `NO_DIFF` / `NO_BASE` from the preamble: they
+describe the working tree, not the requested scope. A path only narrows the
+working-tree review, so `NO_BASE` still applies to it.
+Resolve a relative path argument against `START_DIR` from the preamble, not the
+repo root the preamble switched to.
 
 The user may specify:
 - A PR number (e.g., `/hk-backend-review #42`) — fetch with `gh pr diff 42` and review only the `*.py` / `*.sql` files in it (`gh pr diff` has no path filter)

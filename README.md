@@ -57,6 +57,17 @@ Exit code: `0` = all current, `1` = updates available.
 
 ## Development
 
+### Preamble Tests
+
+The bash preamble of each skill is run by the agent's shell, which may be bash or zsh.
+`tests/preambles.sh` runs every preamble under both against throwaway git repos
+(stale `origin/HEAD`, single-branch clone, PR bases like `release/1.2`, no remote)
+and checks the base branch it resolves. Run it after changing a preamble:
+
+```bash
+tests/preambles.sh
+```
+
 ### Pre-Commit Hook
 
 A pre-commit hook validates skills consistency before committing to this repo:
