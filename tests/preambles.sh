@@ -132,8 +132,13 @@ profile_block() {
 first=""; first_file=""
 for f in "$REPO_ROOT"/*/SKILL.md; do
   block=$(profile_block "$f")
-  if [ -z "$first" ]; then first=$block; first_file=$f; continue; fi
   checks=$((checks + 1))
+  if [ -z "$block" ]; then
+    echo "FAIL  profile block missing: $f"
+    fails=$((fails + 1))
+    continue
+  fi
+  if [ -z "$first_file" ]; then first=$block; first_file=$f; continue; fi
   if [ "$block" != "$first" ]; then
     echo "FAIL  profile block differs: $f vs $first_file"
     fails=$((fails + 1))
@@ -173,6 +178,11 @@ git clone -q "$WORK/o.git" "$WORK/profile" 2>/dev/null
   git checkout -q -B feat-profile origin/dev &&
   echo changed >> docs/review-profile.md && git add docs/review-profile.md && git commit -q -m edit )
 profile_check profile "profile-base" '^BASE: dev$' '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base$'
+
+# A base that cannot be fetched is read, but labelled as possibly stale.
+git clone -q "$WORK/o.git" "$WORK/broken" 2>/dev/null
+git -C "$WORK/broken" remote set-url origin "$WORK/missing.git"
+profile_check broken "profile-fetch-failed" '^REVIEW_PROFILE: origin/dev:docs/review-profile\.md$' '^REVIEW_PROFILE_SOURCE: base \(fetch failed; may be stale\)$'
 
 ( cd "$WORK/profile" && git checkout -q -B feat-delete origin/dev &&
   git rm -q docs/review-profile.md && git commit -q -m delete )

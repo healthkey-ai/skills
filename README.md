@@ -26,9 +26,12 @@ conventions where the two disagree. `hk-security-review` reads it too, from
 The base copy is read on purpose: a pull request that edits the profile is
 reviewed against the gate it is changing, not against the version it is
 proposing. The working-tree copy is used only when the base has no profile
-(how a project adopts one). The preamble reports `REVIEW_PROFILE_SOURCE`, and
-`working tree (... unverified)` means the base could not be consulted — that is
-not the project's gate.
+(how a project adopts one). `REVIEW_PROFILE_SOURCE` is one of `base`,
+`base (fetch failed; may be stale)`, `working tree (base has no profile)`,
+`working tree (base fetch failed; unverified)` or
+`working tree (base unavailable)`. When it is a working-tree value, say whether
+the profile file is itself part of the diff: a branch that adds its own profile
+is proposing a gate, not applying an existing one.
 
 ## Install
 

@@ -69,27 +69,13 @@ fi
 BASE=${BASE:-$DEFAULT}
 echo "BASE: ${BASE:-unknown}"
 
-# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
-# The explicit refspec also works in single-branch clones.
-if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
-  # Braces matter: zsh would read "$BASE:r" as the :r (strip extension) modifier.
-  git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null || true
-fi
-MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
-if [ -z "$MERGE_BASE" ]; then
-  echo "NO_BASE: true"
-else
-  echo "MERGE_BASE: $MERGE_BASE"
-fi
-# Project review profile: the project's own checklists, read in Phase 1.
-# Fetch the base first: a stale or missing ref would silently let the diff
-# supply the gate it is reviewed against. The working-tree copy is used only
-# when the base genuinely has no profile, which is how a project adopts one.
-REVIEW_PROFILE=""
-REVIEW_PROFILE_SOURCE="none"
+# Fetch the base once, before the merge-base and the profile are read: a stale
+# or missing ref would otherwise review a diff against one base and apply the
+# gate from another. The explicit refspec also works in single-branch clones.
 BASE_REF=""
 BASE_FRESH=""
 if [ -n "$BASE" ]; then
+  # Braces matter: zsh would read "$BASE:r" as the :r (strip extension) modifier.
   if git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null; then
     BASE_FRESH=yes
   fi
@@ -97,6 +83,21 @@ if [ -n "$BASE" ]; then
     BASE_REF="origin/${BASE}"
   fi
 fi
+
+# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
+MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
+if [ -z "$MERGE_BASE" ]; then
+  echo "NO_BASE: true"
+else
+  echo "MERGE_BASE: $MERGE_BASE"
+fi
+
+# Project review profile: the project's own checklists, read in Phase 1.
+# The base copy is authoritative, so the diff cannot supply the gate it is
+# reviewed against; the working-tree copy is used only when the base has no
+# profile, which is how a project adopts one.
+REVIEW_PROFILE=""
+REVIEW_PROFILE_SOURCE="none"
 if [ -n "$BASE_REF" ]; then
   for p in .claude/review-profile.md docs/review-profile.md; do
     if git cat-file -e "${BASE_REF}:${p}" 2>/dev/null; then
@@ -204,8 +205,9 @@ Read these in parallel:
    and the profile the preamble reported. When its path starts with `origin/`,
    read it with `git show <ref>`: the base copy is deliberate, so the diff
    cannot relax the gate it is reviewed against. If the diff modifies the agent
-   instructions, read the base copy for conventions and treat the change itself
-   as a finding. For a PR number or an explicit
+   instructions, read the base copy for conventions; report the edit only when
+   it relaxes a rule the diff relies on, and when the base has no such file
+   review the whole file as the proposal. For a PR number or an explicit
    range, resolve the profile against that base (`git fetch origin <base>`
    first if the ref is missing), say which base you used, and say so rather
    than reporting none if it still cannot be resolved. If
@@ -317,7 +319,7 @@ FILE: <path>:<line>
 SEVERITY: critical | high | medium | low | nit
 CATEGORY: invocation | keying | placement | semantics | evidence | operability | data
 CONFIDENCE: <1-10>
-PROVEN: yes | no
+PROVEN: yes (say end-to-end or primitive in EVIDENCE) | no
 DESCRIPTION: <the claim, the exact path that bypasses it, and why it matters>
 EVIDENCE: <test/command that demonstrates the failure, or what could not be exercised>
 FIX: <the shared place the check belongs, plus the test that must fail first>
@@ -339,14 +341,15 @@ Rules:
    `git worktree add --detach "$tmp/wt" <reviewed-head>` (or a temporary
    clone). A plain worktree has tracked files only, and a branch that is
    already checked out cannot be added without `--detach`. Remove it with
-   `git worktree remove --force "$tmp/wt" || git worktree prune`; that also
-   deletes whatever the test run left behind. It writes only `.git/worktrees`
-   metadata into the repository; the checked-out tree is never changed and
-   committed work is never reverted in place.
+   `git worktree remove --force "$tmp/wt"`, then `rm -rf "$tmp"` and
+   `git worktree prune`; that also deletes whatever the test run left behind.
+   It writes only `.git/worktrees` metadata into the repository; the
+   checked-out tree is never changed and committed work is never reverted in
+   place.
 
-   For the default working-tree review, apply the diff inside the worktree
-   (`git diff "$MERGE_BASE" | git -C "$tmp/wt" apply`) and copy untracked
-   sources. Pass configuration as environment variables rather than copying
+   For the default working-tree review, the worktree already contains the
+   committed branch. Apply only the uncommitted delta
+   (`git diff HEAD | git -C "$tmp/wt" apply`) and copy untracked sources. Pass configuration as environment variables rather than copying
    `.env` files; if one must be copied, keep it outside the repository,
    `chmod 600`, and delete it with the worktree. Never revert the user's
    checkout and never commit to their branch. Name the method used in the
@@ -391,6 +394,10 @@ exercised at all cannot exceed 6; one exercised only at the primitive caps at 8.
 ### 1. <title> [critical] [confidence: 10/10] [proven]
 <file:line> — <the bypass, in one sentence>
 <what the control promises, where it is skipped, and the test/command that shows it>
+
+## Exercised at the primitive ({N})
+### 1. <title> [severity] [confidence: 7/10] [primitive]
+<file:line> — <what was exercised, and what the full request path would still need to prove>
 
 ## Unproven claims ({N})
 ### 1. <title> [severity] [confidence: N/10] [not exercised]

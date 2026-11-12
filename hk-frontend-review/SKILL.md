@@ -42,27 +42,13 @@ fi
 BASE=${BASE:-$DEFAULT}
 echo "BASE: ${BASE:-unknown}"
 
-# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
-# The explicit refspec also works in single-branch clones.
-if [ -n "$BASE" ] && ! git rev-parse --verify -q "origin/$BASE" >/dev/null; then
-  # Braces matter: zsh would read "$BASE:r" as the :r (strip extension) modifier.
-  git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null || true
-fi
-MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
-if [ -z "$MERGE_BASE" ]; then
-  echo "NO_BASE: true"
-else
-  echo "MERGE_BASE: $MERGE_BASE"
-fi
-# Project review profile: the project's own checklists, read in Phase 1.
-# Fetch the base first: a stale or missing ref would silently let the diff
-# supply the gate it is reviewed against. The working-tree copy is used only
-# when the base genuinely has no profile, which is how a project adopts one.
-REVIEW_PROFILE=""
-REVIEW_PROFILE_SOURCE="none"
+# Fetch the base once, before the merge-base and the profile are read: a stale
+# or missing ref would otherwise review a diff against one base and apply the
+# gate from another. The explicit refspec also works in single-branch clones.
 BASE_REF=""
 BASE_FRESH=""
 if [ -n "$BASE" ]; then
+  # Braces matter: zsh would read "$BASE:r" as the :r (strip extension) modifier.
   if git fetch -q origin "+refs/heads/${BASE}:refs/remotes/origin/${BASE}" 2>/dev/null; then
     BASE_FRESH=yes
   fi
@@ -70,6 +56,21 @@ if [ -n "$BASE" ]; then
     BASE_REF="origin/${BASE}"
   fi
 fi
+
+# Diff from the merge-base to the working tree, so uncommitted edits are reviewed too.
+MERGE_BASE=$(git merge-base "origin/$BASE" HEAD 2>/dev/null || true)
+if [ -z "$MERGE_BASE" ]; then
+  echo "NO_BASE: true"
+else
+  echo "MERGE_BASE: $MERGE_BASE"
+fi
+
+# Project review profile: the project's own checklists, read in Phase 1.
+# The base copy is authoritative, so the diff cannot supply the gate it is
+# reviewed against; the working-tree copy is used only when the base has no
+# profile, which is how a project adopts one.
+REVIEW_PROFILE=""
+REVIEW_PROFILE_SOURCE="none"
 if [ -n "$BASE_REF" ]; then
   for p in .claude/review-profile.md docs/review-profile.md; do
     if git cat-file -e "${BASE_REF}:${p}" 2>/dev/null; then
@@ -154,7 +155,7 @@ Three phases. Phase 1 gathers context, Phase 2 runs two parallel review agents, 
 Read these in parallel:
 
 1. **The diff**: `git diff $MERGE_BASE -- '*.tsx' '*.ts' '*.css'` plus the files listed under UNTRACKED (or the PR / range diff, or scoped to the user's path)
-2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for conventions and architecture. If the diff modifies them, read the base copy for conventions and treat the change itself as a finding: a diff must not write the rules it is reviewed against
+2. **Agent instructions**: Read the project's `AGENTS.md` (or its `CLAUDE.md` when there is no `AGENTS.md`) for conventions and architecture. If the diff modifies them, read the base copy for conventions; report the edit only when it relaxes a rule the diff relies on, and when the base has no such file review the whole file as the proposal
 3. **Review profile**: Read the profile the preamble reported. When the path starts with `origin/`, read it with `git show <ref>`: the base copy is deliberate, so a diff cannot relax the gate it is reviewed against. For a PR number or an explicit range, resolve the profile against **that** base rather than the one the preamble detected (`git fetch origin <base>` first if `origin/<base>` is missing), say which base you used, and say so rather than reporting none if it still cannot be resolved. If `REVIEW_PROFILE_SOURCE` is not `base`, name the case: a working-tree copy whose base was unavailable or stale is not the project's gate. It is the project's own addendum — domain checklists, commands and gates — and where it is more specific than this skill, it wins. With no profile, the defaults below apply
 4. **Recent commits**: `git log $MERGE_BASE..HEAD --oneline` for commit intent (for a PR: `gh pr view N --json commits`; for a range: `git log <range> --oneline`)
 5. **Package versions**: Read `package.json` for React, React Query, Tailwind, and shadcn versions
